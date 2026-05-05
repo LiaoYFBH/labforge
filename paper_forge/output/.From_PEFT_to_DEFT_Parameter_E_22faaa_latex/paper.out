@@ -1,0 +1,16 @@
+\BOOKMARK [1][-]{section.1}{Introduction}{}% 1
+\BOOKMARK [1][-]{section.2}{Related\040Work}{}% 2
+\BOOKMARK [1][-]{section.3}{Weight\040Induced\040Sparsity}{}% 3
+\BOOKMARK [1][-]{section.4}{Activation\040Induced\040Sparsity}{}% 4
+\BOOKMARK [1][-]{section.5}{Methodology}{}% 5
+\BOOKMARK [1][-]{section.6}{Background\040and\040Notations}{}% 6
+\BOOKMARK [1][-]{section.7}{Density\040Loss}{}% 7
+\BOOKMARK [1][-]{section.8}{Parameter\040Efficient\040Fine-tuning\040\(PEFT\)}{}% 8
+\BOOKMARK [1][-]{section.9}{DEFT:\040Parameter\040and\040Activation\040Density\040Efficient\040Fine-tuning}{}% 9
+\BOOKMARK [1][-]{section.10}{ADA-DEFT\040:\040Adaptive\040Parameter\040and\040Activation\040Density-Efficient\040Fine-Tuning}{}% 10
+\BOOKMARK [1][-]{section.11}{Experiments}{}% 11
+\BOOKMARK [1][-]{section.12}{Results\040on\040GLUE\040Benchmark}{}% 12
+\BOOKMARK [1][-]{section.13}{Results\040on\040SQuAD\040Dataset}{}% 13
+\BOOKMARK [1][-]{section.14}{Pruning\040of\040PEFT/DEFT\040Models}{}% 14
+\BOOKMARK [1][-]{section.15}{Conclusion}{}% 15
+\BOOKMARK [1][-]{section.16}{Acknowledgments}{}% 16

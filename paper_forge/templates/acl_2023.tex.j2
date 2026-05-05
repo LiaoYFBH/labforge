@@ -1,0 +1,116 @@
+\documentclass[((( class_font_size ))),((( page_size ))),twocolumn]{article}
+
+((* if has_cjk *))
+\usepackage[UTF8,fontset=fandol]{ctex}
+((* endif *))
+\usepackage[((( page_size ))),margin=25mm]{geometry}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{hyperref}
+\usepackage{amsmath,amssymb}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{setspace}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=blue,
+    urlcolor=blue,
+}
+\sloppy
+\emergencystretch=2em
+\allowdisplaybreaks
+\setstretch{((( line_spacing )))}
+\AtBeginDocument{\fontsize{((( body_font_size )))}{((( body_baseline_skip )))}\selectfont}
+
+\title{((( title )))}
+
+((* if authors *))
+\author{((( authors|join(' \\and ') )))}
+((* else *))
+\author{}
+((* endif *))
+\date{}
+
+\begin{document}
+((* if not include_page_numbers *))
+\pagestyle{empty}
+\pagenumbering{gobble}
+((* endif *))
+\twocolumn[
+  \begin{@twocolumnfalse}
+    \maketitle
+((* if abstract *))
+    \begin{abstract}
+((( abstract )))
+    \end{abstract}
+((* endif *))
+((* if keywords *))
+    \noindent\textbf{(((labels.keywords))):} ((( keywords|join(', ') )))
+    \vspace{1em}
+((* endif *))
+  \end{@twocolumnfalse}
+]
+
+((* for section in sections *))
+((* if section.level == 1 *))
+\section{((( section.heading )))}
+((* elif section.level == 2 *))
+\subsection{((( section.heading )))}
+((* else *))
+\subsubsection{((( section.heading )))}
+((* endif *))
+
+((* for para in section.paragraphs *))
+((( para )))
+
+((* endfor *))
+
+((* for fig in section.figures *))
+((* if fig.rendered_path *))
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{((( fig.rendered_path )))}
+    \caption{((( fig.caption )))}
+\end{figure}
+((* endif *))
+((* endfor *))
+
+((* for tbl in section.tables *))
+((* if tbl.headers and tbl.rows *))
+\begin{table}[t]
+    \centering
+    \caption{((( tbl.caption )))}
+    \small
+    \begin{tabular}{((( tbl.col_spec )))}
+    \toprule
+    ((( tbl.header_row ))) \\
+    \midrule
+    ((* for row_line in tbl.body_rows *))
+    ((( row_line ))) \\
+    ((* endfor *))
+    \bottomrule
+    \end{tabular}
+\end{table}
+((* endif *))
+((* endfor *))
+
+((* endfor *))
+
+((* if references *))
+\begin{thebibliography}{((( references|length )))}
+((* for ref in references *))
+\bibitem{ref((( loop.index )))} ((( ref )))
+((* endfor *))
+\end{thebibliography}
+((* endif *))
+
+\end{document}

@@ -1,0 +1,104 @@
+\PassOptionsToPackage{((( page_size )))}{geometry}
+\documentclass[sigconf,((( class_font_size )))]{acmart}
+
+\setcopyright{none}
+((* if include_page_numbers *))
+\settopmatter{printacmref=false, printccs=false, printfolios=true}
+((* else *))
+\settopmatter{printacmref=false, printccs=false, printfolios=false}
+((* endif *))
+\acmConference[]{}{}{}
+
+((* if has_cjk *))
+\usepackage[UTF8,fontset=fandol]{ctex}
+((* endif *))
+\usepackage{longtable}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{setspace}
+\sloppy
+\emergencystretch=2em
+\allowdisplaybreaks
+\setstretch{((( line_spacing )))}
+\AtBeginDocument{\fontsize{((( body_font_size )))}{((( body_baseline_skip )))}\selectfont}
+
+\title{((( title )))}
+
+((* if authors *))
+((* for author in authors *))
+\author{((( author )))}
+\affiliation{\institution{Affiliation}}
+((* endfor *))
+((* endif *))
+
+\begin{document}
+((* if not include_page_numbers *))
+\pagestyle{empty}
+\pagenumbering{gobble}
+((* endif *))
+
+((* if abstract *))
+\begin{abstract}
+((( abstract )))
+\end{abstract}
+((* endif *))
+
+((* if keywords *))
+\keywords{((( keywords|join(', ') )))}
+((* endif *))
+
+\maketitle
+
+((* for section in sections *))
+((* if section.level == 1 *))
+\section{((( section.heading )))}
+((* elif section.level == 2 *))
+\subsection{((( section.heading )))}
+((* else *))
+\subsubsection{((( section.heading )))}
+((* endif *))
+
+((* for para in section.paragraphs *))
+((( para )))
+
+((* endfor *))
+
+((* for fig in section.figures *))
+((* if fig.rendered_path *))
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{((( fig.rendered_path )))}
+    \caption{((( fig.caption )))}
+\end{figure}
+((* endif *))
+((* endfor *))
+
+((* for tbl in section.tables *))
+((* if tbl.headers and tbl.rows *))
+\begin{table}[t]
+    \centering
+    \caption{((( tbl.caption )))}
+    \begin{tabular}{((( tbl.col_spec )))}
+    \toprule
+    ((( tbl.header_row ))) \\
+    \midrule
+    ((* for row_line in tbl.body_rows *))
+    ((( row_line ))) \\
+    ((* endfor *))
+    \bottomrule
+    \end{tabular}
+\end{table}
+((* endif *))
+((* endfor *))
+
+((* endfor *))
+
+((* if references *))
+\begin{thebibliography}{((( references|length )))}
+((* for ref in references *))
+\bibitem{ref((( loop.index )))} ((( ref )))
+((* endfor *))
+\end{thebibliography}
+((* endif *))
+
+\end{document}

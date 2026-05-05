@@ -1,0 +1,6 @@
+{
+    "id": "demo_regression",
+    "description": "Load the Boston-like housing dataset (use sklearn.datasets.fetch_california_housing), train a Ridge regression model, evaluate with RMSE and R² on a test set, and save a scatter plot of predicted vs actual values.",
+    "expected_output": "A scatter plot saved as 'pred_vs_actual.png' and printed RMSE/R² metrics.",
+    "data_description": "California housing dataset from sklearn (built-in, no download needed)."
+}

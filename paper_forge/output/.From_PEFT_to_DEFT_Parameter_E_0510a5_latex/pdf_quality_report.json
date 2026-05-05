@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "issues": [
+    {
+      "severity": "warning",
+      "kind": "code_like_prose",
+      "message": "Code-like syntax appears in the paper body.",
+      "evidence": "\\title{From PEFT to DEFT: Parameter Efficient Finetuning for Reducing Activation Density in Transformers}"
+    },
+    {
+      "severity": "warning",
+      "kind": "long_math",
+      "message": "A long display equation is not constrained to column width.",
+      "evidence": "\\begin{aligned}\\arg\\min_{\\Phi,S}\\mathcal{L}_{total}&=\\mathcal{L}_{T}\\left(D;\\left\\{\\Theta,\\Phi,S\\right\\}\\right)\\\\&\\quad+\\alpha\\cdot\\mathcal{L}_{density}\\left(D;"
+    },
+    {
+      "severity": "warning",
+      "kind": "overfull_hbox",
+      "message": "LaTeX reported 1 overfull hbox warning(s).",
+      "evidence": "13.06535pt"
+    }
+  ]
+}

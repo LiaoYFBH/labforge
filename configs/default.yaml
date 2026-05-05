@@ -1,0 +1,39 @@
+
+
+agent_model:
+  model: "MiniMax-M2.7"
+  api_key: ""
+  base_url: "https://api.minimaxi.com/v1"
+  temperature: 0.0
+  max_tokens: 8192
+  timeout: 180
+
+reviewer:
+  enabled: true
+  model:
+
+
+    model: "deepseek-v3"
+    api_key: ""
+    base_url: "https://aistudio.baidu.com/llm/lmapi/v3"
+    temperature: 0.0
+    max_tokens: 2048
+  checkpoints:
+    - after_literature
+    - before_report
+
+sandbox:
+  backend: "subprocess"
+  timeout: 300
+  max_output_length: 10000
+  working_dir: "/tmp/lab_forge_workspace"
+
+
+  python_executable: ""
+
+
+max_steps: 0
+record_trajectory: true
+trajectory_dir: "./trajectories"
+ocr_enabled: false
+verbose: true

@@ -1,0 +1,25 @@
+ocr:
+  api_url: ""
+  token: ""
+  use_doc_orientation_classify: false
+  use_doc_unwarping: false
+  use_chart_recognition: false
+
+llm:
+  model: "ernie-4.5-turbo-128k-preview"
+  api_key: ""
+  base_url: "https://aistudio.baidu.com/llm/lmapi/v3"
+  temperature: 0.3
+  max_tokens: 8192
+  timeout: 120
+
+pdf_style:
+  page_size: "A4"
+  font_size_body: 11
+  font_size_title: 22
+  font_size_section: 15
+  font_size_subsection: 13
+  margin_mm: 25
+  two_column: false
+  line_spacing: 1.4
+  include_page_numbers: true

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "lab-forge"
+version = "0.1.0"
+description = "An automated research agent for ML/AI experiments — PDF ingestion, literature search, sandboxed code execution, hallucination review, and top-conference paper PDF generation via PaperForge."
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "pyyaml>=6.0",
+    "pypdf>=5.0.0",
+    "requests>=2.28.0",
+    "pydantic>=2.0.0",
+    "langchain>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "langchain-core>=1.0.0",
+    "langgraph>=1.0.0",
+]
+
+[project.scripts]
+lab-forge = "lab_forge.main:main"

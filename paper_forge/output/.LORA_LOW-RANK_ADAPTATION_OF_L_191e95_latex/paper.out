@@ -1,0 +1,15 @@
+\BOOKMARK [1][-]{section.1}{INTRODUCTION}{}% 1
+\BOOKMARK [1][-]{section.2}{PROBLEM\040STATEMENT}{}% 2
+\BOOKMARK [1][-]{section.3}{AREN'T\040EXISTING\040SOLUTIONS\040GOOD\040ENOUGH?}{}% 3
+\BOOKMARK [1][-]{section.4}{Our\040Method}{}% 4
+\BOOKMARK [2][-]{subsection.4.1}{Low-Rank-Parametrized\040Update\040Matrices}{section.4}% 5
+\BOOKMARK [2][-]{subsection.4.2}{APPLYING\040LORA\040TO\040TRANSFORMER}{section.4}% 6
+\BOOKMARK [1][-]{section.5}{EMPIRICAL\040EXPERIMENTS}{}% 7
+\BOOKMARK [2][-]{subsection.5.1}{BASELINES}{section.5}% 8
+\BOOKMARK [2][-]{subsection.5.2}{RoBERTa\040BASE/LARGE}{section.5}% 9
+\BOOKMARK [2][-]{subsection.5.3}{DEBERTA\040XXL}{section.5}% 10
+\BOOKMARK [2][-]{subsection.5.4}{GPT-2\040MEDIUM/LARGE}{section.5}% 11
+\BOOKMARK [2][-]{subsection.5.5}{SCALING\040UP\040TO\040GPT-3\040175B}{section.5}% 12
+\BOOKMARK [1][-]{section.6}{RELATED\040WORKS}{}% 13
+\BOOKMARK [1][-]{section.7}{CONCLUSION\040AND\040FUTURE\040WORK}{}% 14
+\BOOKMARK [1][-]{section*.1}{References}{}% 15

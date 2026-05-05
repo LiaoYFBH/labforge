@@ -1,0 +1,6 @@
+include README.md
+include README.en.md
+include requirements.txt
+recursive-include configs *.yaml
+recursive-include templates *.tex.j2
+recursive-include templates/_assets *
