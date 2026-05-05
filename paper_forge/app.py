@@ -2,7 +2,7 @@
 PaperForge — 文档转学术论文 PDF 工作台。
 
 特性：
-- Monochrome Research Studio UI（与 lab-forge ui-new.py 同款主题）
+- Monochrome Research Studio UI（与 lab-forge ui.py 同款主题）
 - 支持 PaddleOCR 解析 PDF / 图片为 Markdown
 - 支持星河社区（AI Studio）等任意 OpenAI 兼容大模型，UI 内可配置 / 切换
 - 多种顶会 LaTeX 模板（IEEE / NeurIPS / ICML / ACL / ACM SIGCONF / 通用 article）
@@ -128,7 +128,7 @@ session = SessionState()
 CUSTOM_CSS = """
 /* PaperForge — monochrome Research Studio palette.
  *
- * The visual language matches the lab-forge ui-new.py file
+ * The visual language matches the lab-forge ui.py file
  * so the two apps feel like siblings: white canvas, hairline borders,
  * serif headings, mono captions, single accent (Klein-blue) reserved for
  * primary actions and status badges. No glow, no neon, no gradient body.
@@ -173,7 +173,7 @@ body, .gradio-container {
 .gradio-container * { box-sizing: border-box; }
 footer { display: none !important; }
 
-/* Top bar — mirrors ui-new.py .sp-topbar ----------------------------------- */
+/* Top bar — mirrors ui.py .sp-topbar ----------------------------------- */
 .page-header {
   display: flex;
   align-items: center;

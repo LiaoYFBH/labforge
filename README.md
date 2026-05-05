@@ -24,6 +24,19 @@ pip install -r requirements.txt
 cp .env.example .env   # 填写 API key
 ```
 
+### LaTeX / PDF 导出依赖
+
+lab-forge 的论文导出由内置 `paper_forge` 完成。Python 依赖只负责生成 LaTeX 源码；如需在本机直接编译 PDF，还需要系统安装 LaTeX 发行版，并确保 `latexmk` / `xelatex` / `pdflatex` 至少一个在 `PATH` 中。
+
+推荐在 Linux 或 Windows WSL（Ubuntu）环境使用：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y latexmk texlive-xetex texlive-latex-extra texlive-publishers texlive-lang-chinese fonts-noto-cjk
+```
+
+Windows 原生环境也可使用 TeX Live / MiKTeX，但路径和中文字体配置更容易出问题，优先建议 WSL 或 Linux。
+
 ### 命令行
 
 ```bash
@@ -60,8 +73,11 @@ lab-forge/
 │   ├── tools/
 │   └── web.py              # Gradio 后端
 ├── paper_forge/            # 论文导出后端（亦作为独立仓库发布）
-├── ui-new.py               # 主 UI
+├── ui.py               # 主 UI
 ├── configs/
 └── tests/
 ```
 
+## 协议
+
+待定。

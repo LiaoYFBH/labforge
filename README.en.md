@@ -24,6 +24,19 @@ pip install -r requirements.txt
 cp .env.example .env   # fill in an API key
 ```
 
+### LaTeX / PDF export dependency
+
+lab-forge exports papers through the bundled `paper_forge` backend. Python dependencies generate the LaTeX source, but local PDF compilation also requires a system LaTeX distribution with at least one of `latexmk` / `xelatex` / `pdflatex` available on `PATH`.
+
+Linux or Windows WSL (Ubuntu) is recommended:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y latexmk texlive-xetex texlive-latex-extra texlive-publishers texlive-lang-chinese fonts-noto-cjk
+```
+
+Native Windows can work with TeX Live / MiKTeX, but PATH and CJK font setup are usually smoother under WSL or Linux.
+
 ### CLI
 
 ```bash
@@ -60,8 +73,11 @@ lab-forge/
 │   ├── tools/
 │   └── web.py              # Gradio backend
 ├── paper_forge/            # paper-export backend (also released as a standalone repo)
-├── ui-new.py               # primary UI
+├── ui.py               # primary UI
 ├── configs/
 └── tests/
 ```
 
+## License
+
+TBD.
