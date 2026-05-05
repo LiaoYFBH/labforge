@@ -36,7 +36,7 @@ python -m lab_forge interactive --config configs/default.yaml
 ### Web UI
 
 ```bash
-python ui-new.py        # 默认 0.0.0.0:7861
+python ui.py        # 默认 0.0.0.0:7861
 ```
 
 星河社区部署使用 `Gradio.app.py` 作为入口。
@@ -65,6 +65,3 @@ lab-forge/
 └── tests/
 ```
 
-## 协议
-
-待定。

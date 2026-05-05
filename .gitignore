@@ -11,9 +11,8 @@ benchmark_results.json
 ARCHITECTURE_AUDIT.md
 LATEX_DIRECT_REFACTOR_PLAN.md
 REFACTOR_PLAN.md
-lab-forge/paper_forge.tar.gz
+paper_forge.tar.gz
 .env
-.env.*
 env.txt
 
 
@@ -32,12 +31,12 @@ __pycache__/
 
 
 =*
-lab-forge/research_paper (14).pdf
+research_paper (14).pdf
 evals/lab-forge/测评方案.md
 tests/lab-forge/evals/mini_eval
 paper_forge/tests/
 docs/evaluation.md
 测评方案.md
 configs/sab.yaml
-lab-forge/docs
+docs
 configs/smoke_test.yaml
