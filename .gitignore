@@ -10,11 +10,11 @@ test_trajectories/
 sab_results/
 sab_benchmark/
 benchmark_results.json
-lab-forge/research_paper (14).pdf
+research_paper (14).pdf
 # Secrets
-.envlab-forge/docs
-lab-forge/evals
-.env.*
+docs
+evals
+.env
 env.txt
 
 # Large benchmark assets — never commit (3.8GB benchmark dir, 1.7GB zip)
