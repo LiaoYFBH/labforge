@@ -49,10 +49,8 @@ python -m lab_forge interactive --config configs/default.yaml
 ### Web UI
 
 ```bash
-python ui-new.py        # default 0.0.0.0:7861
+python ui.py        # default 0.0.0.0:7861
 ```
-
-AI Studio (星河社区) deployment uses `Gradio.app.py` as the entry point.
 
 ## Configuration
 
