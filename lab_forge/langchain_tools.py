@@ -39,9 +39,9 @@ def _truncate(text: str, max_len: int = 4000) -> str:
     return text[:max_len] + f"\n... (truncated, {len(text)} chars total)"
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Pydantic input schemas
+# ---------------------------------------------------------------------------
 
 class ExecuteCodeInput(BaseModel):
     code: str = Field(description="Python code to execute.")
@@ -128,9 +128,9 @@ class SubmitResultInput(BaseModel):
     summary: str = Field(description="Brief summary of what was accomplished and key findings.")
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Tool factory functions
+# ---------------------------------------------------------------------------
 
 def make_execute_code_tool(sandbox: Sandbox) -> StructuredTool:
     inner = ExecuteCodeTool(sandbox)
@@ -185,10 +185,10 @@ def make_file_write_tool(sandbox: Sandbox) -> StructuredTool:
     def _run(path: str, content: str) -> str:
         result = inner.execute(path=path, content=content)
         output = _truncate(result.output)
-
-
-
-
+        # Surface rejections (e.g. blocked data-file writes) with the same
+        # "ERROR:" prefix other tools use, so the reviewer and phase tracker
+        # register it as a failure and the agent knows to fall back to
+        # execute_code.
         return output if result.success else f"ERROR: {output}"
 
     return StructuredTool(
@@ -307,8 +307,8 @@ def make_generate_report_tool(
             response = writer_llm.invoke(prompt)
             content = getattr(response, "content", response)
             if isinstance(content, list):
-
-
+                # Some providers return content as a list of {"text": "..."}
+                # blocks — flatten to a single string.
                 parts = []
                 for item in content:
                     if isinstance(item, str):
@@ -367,13 +367,13 @@ def make_generate_report_tool(
         func=_run,
         args_schema=GenerateReportInput,
     )
-
-
-
-
-
-
-    tool._lab_forge_inner = inner
+    # P5 fix: attach the inner GenerateReportTool to the StructuredTool so
+    # the runtime caller (agent.run, etc.) can mutate ``task_description``
+    # at task start. Without this hook the tool is built once at agent
+    # __init__ and stays unaware of which task it is currently serving.
+    # ``_lab_forge_inner`` is a private attribute name to avoid colliding
+    # with future LangChain fields.
+    tool._lab_forge_inner = inner  # type: ignore[attr-defined]
     return tool
 
 
@@ -426,7 +426,7 @@ def make_submit_result_tool(
                         "report with an explicit caveat before submitting."
                     )
         result = submit_tool.execute(result_path=result_path, summary=summary)
-
+        # Return a special marker that the custom executor can detect
         return f"TASK_COMPLETE: {result.output}"
 
     return StructuredTool(
@@ -437,9 +437,9 @@ def make_submit_result_tool(
     )
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Convenience: create all tools at once
+# ---------------------------------------------------------------------------
 
 CODE_TOOL_NAMES = {
     "execute_code",

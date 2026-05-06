@@ -53,7 +53,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-
+# Status taxonomy for each checklist item.
 STATUS_DONE = "done"
 STATUS_IN_PROGRESS = "in_progress"
 STATUS_PENDING = "pending"
@@ -81,7 +81,7 @@ class ChecklistStatus:
     """Per-item evaluation result. Refreshed every 5 rounds."""
 
     item_id: int
-    status: str
+    status: str   # one of STATUS_*
     evidence: str = ""
 
     def is_done(self) -> bool:
@@ -123,9 +123,9 @@ class TaskChecklist:
         return out
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Parsing the task description into a checklist (one-shot at run start)
+# ---------------------------------------------------------------------------
 
 _PARSE_PROMPT = """\
 You are a research project manager. Read the research task below and break it
@@ -178,7 +178,7 @@ def _safe_json_parse(text: str) -> dict | None:
     if not text:
         return None
     text = text.strip()
-
+    # Strip ``` fences when present.
     fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if fence_match:
         text = fence_match.group(1).strip()
@@ -186,7 +186,7 @@ def _safe_json_parse(text: str) -> dict | None:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         pass
-
+    # Fall back: extract the first balanced { ... } block.
     start = text.find("{")
     if start == -1:
         return None
@@ -223,7 +223,7 @@ def parse_task_checklist(
 
     try:
         from langchain_core.messages import HumanMessage
-    except ImportError:
+    except ImportError:  # pragma: no cover - langchain always present in agent runs
         logger.warning("langchain_core unavailable; checklist disabled")
         return TaskChecklist()
 
@@ -268,9 +268,9 @@ def parse_task_checklist(
     return TaskChecklist(items=items)
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Evaluating checklist status against the trajectory (every 5 rounds)
+# ---------------------------------------------------------------------------
 
 _EVAL_PROMPT = """\
 You are evaluating a research agent's progress against a task checklist.
@@ -329,7 +329,7 @@ def _format_trajectory_for_eval(steps: list[Any], window: int = 30) -> str:
         success = getattr(s, "success", True)
         flag = "✓" if success else "✗"
         obs = (getattr(s, "observation", "") or "").strip()
-
+        # Compact obs: keep first 240 chars of the first non-empty line
         compact = ""
         for line in obs.splitlines():
             line = line.strip()
@@ -418,7 +418,7 @@ def evaluate_checklist_status(
         out.append(ChecklistStatus(item_id=item_id, status=status, evidence=evidence[:240]))
         seen_ids.add(item_id)
 
-
+    # Make sure every checklist item has a status entry (default to pending).
     for item in checklist.items:
         if item.id not in seen_ids:
             out.append(ChecklistStatus(item_id=item.id, status=STATUS_PENDING))
@@ -427,9 +427,9 @@ def evaluate_checklist_status(
     return out
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Rendering for round injection
+# ---------------------------------------------------------------------------
 
 def format_checklist_for_round(
     checklist: TaskChecklist,
@@ -474,7 +474,7 @@ def format_checklist_for_round(
             if s.evidence:
                 lines.append(f"     evidence so far: {s.evidence}")
             lines.append(f"     hint to finish:  {item.verification_hint}")
-        else:
+        else:  # pending
             lines.append(f"☐ [{item.id}] {item.title}")
             lines.append(f"     status: pending — no evidence in tool history yet")
             lines.append(f"     hint:   {item.verification_hint}")
@@ -527,12 +527,12 @@ def format_submit_block_message(
     )
 
 
+# ---------------------------------------------------------------------------
+# Static anti-drift reminder (replaces the LLM-eval-loop above)
+# ---------------------------------------------------------------------------
 
-
-
-
-
-
+# File categories rendered in the workspace listing — kept narrow on purpose
+# so we don't spam every .pyc and .log into the agent's working memory.
 _REMINDER_CATEGORIES = (
     ("data tables",  (".csv", ".tsv", ".jsonl", ".parquet")),
     ("figures",      (".png", ".jpg", ".jpeg", ".svg")),
@@ -570,7 +570,7 @@ def _list_workspace_artifacts(workspace_dir: str | None) -> dict[str, list[str]]
                     bucket[label].append(rel)
                     break
     except OSError:
-
+        # Filesystem hiccup is non-fatal for the reminder.
         pass
     return bucket
 
@@ -641,19 +641,19 @@ def format_topic_reminder(
         lines.append("Artifacts already produced in your workspace (filesystem-verified, not LLM-judged):")
         lines.extend(artifact_lines)
     elif checklist.items:
-
-
+        # Only mention the empty workspace if there ARE expected deliverables —
+        # otherwise the line is just noise.
         lines.append("")
         lines.append("Workspace is currently empty — no artifacts produced yet.")
 
-
-
-
-
-
-
-
-
+    # P1 anti-early-submit: soft (non-blocking) caution when the workspace
+    # looks thin for an experiment-shaped topic. We do NOT block submit
+    # here — the LLM-eval gate that used to do that was the death-loop
+    # source removed in Phase 1 — but a deterministic reminder helps the
+    # LLM resist the temptation to submit a smoke-test run as a finished
+    # paper. The check is a simple file-count heuristic; agent is still
+    # free to override its own judgment if the topic genuinely needs no
+    # more artifacts.
     thin_warn = _should_warn_thin_workspace(mode, artifacts)
     if thin_warn:
         lines.append("")

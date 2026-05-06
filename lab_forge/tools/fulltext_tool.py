@@ -19,12 +19,12 @@ import requests
 
 try:
     from bs4 import BeautifulSoup
-except ImportError:
+except ImportError:  # pragma: no cover - optional dependency
     BeautifulSoup = None
 
 try:
     from pypdf import PdfReader
-except ImportError:
+except ImportError:  # pragma: no cover - optional dependency
     PdfReader = None
 
 from ..sandbox import Sandbox

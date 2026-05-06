@@ -1,42 +1,35 @@
+# lab-forge-specific ignores. Root .gitignore covers most things;
+# this file keeps a few project-local artefacts out of the index.
 
-
+# Local UI settings (contains API keys when user saves them from the web UI)
 .ui_settings.json
 
-
+# Runtime outputs
 trajectories/
 test_trajectories/
 sab_results/
 sab_benchmark/
 benchmark_results.json
-ARCHITECTURE_AUDIT.md
-LATEX_DIRECT_REFACTOR_PLAN.md
-REFACTOR_PLAN.md
-paper_forge.tar.gz
-.env
+lab-forge/research_paper (14).pdf
+# Secrets
+.envlab-forge/docs
+lab-forge/evals
+.env.*
 env.txt
 
-
+# Large benchmark assets — never commit (3.8GB benchmark dir, 1.7GB zip)
 *.zip
 benchmark/
 benchmark.zip
 =0.2.0
 
-
+# Python caches
 __pycache__/
 *.py[cod]
 .pytest_cache/
 
-
+# Local venv
 .venv/
 
-
+# pip placeholder files left over from mis-quoted `pip install`
 =*
-research_paper (14).pdf
-evals/lab-forge/测评方案.md
-tests/lab-forge/evals/mini_eval
-paper_forge/tests/
-docs/evaluation.md
-测评方案.md
-configs/sab.yaml
-docs
-configs/smoke_test.yaml

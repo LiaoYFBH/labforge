@@ -14,6 +14,19 @@ paper-forge 提供一条从原始素材到学术论文 PDF 的端到端流程：
 
 paper-forge 既可独立运行，也可作为 lab-forge 等上游 Agent 的论文导出后端。
 
+## 环境建议
+
+推荐在 Linux 环境运行；Windows 用户建议使用 WSL2（Ubuntu）安装和启动本项目。PDF / LaTeX 编译功能需要本机安装 LaTeX 发行版，例如 TeX Live，并确保 `latexmk` / `xelatex` / `pdflatex` 至少有一个可在命令行中调用。
+
+Ubuntu / WSL2 可参考：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y latexmk texlive-xetex texlive-latex-recommended \
+    texlive-latex-extra texlive-fonts-recommended texlive-lang-chinese \
+    fonts-noto-cjk
+```
+
 ## 快速开始
 
 ```bash
@@ -25,11 +38,11 @@ pip install -r requirements.txt
 python app.py            # 默认 0.0.0.0:7860
 ```
 
-星河社区部署同样使用 `app.py` 作为入口；如平台要求固定文件名，可将入口指向 `app:main`。
+星河社区部署使用 `Gradio.app.py` 作为入口。
 
 打开 UI 后：
 
-1. 在「Model & OCR」中选择预设或填入自定义 OpenAI 兼容接口。
+1. 在「模型设置」中选择预设（推荐 `星河社区 · ERNIE 4.5 Turbo 128K`）或填入自定义 OpenAI 兼容接口。
 2. 上传 PDF / 图片，或直接粘贴 Markdown。
 3. 选择模板（默认 `article`），生成 PDF。
 

@@ -3,12 +3,14 @@
 
 每个 :class:`PaperTemplate` 对应一个 Jinja2 模板文件 (``*.tex.j2``)，并附带
 - ``label`` / ``description``：UI 上展示用
-- ``download_urls``：(filename, url) 元组列表，保留给需要官方
-  ``.sty`` / ``.bst`` / ``.cls`` 的发行版使用。当前内置模板默认不做运行时
-  网络下载，主要依赖随仓库发布的模板与 TexLive 常见宏包。
+- ``required_packages``：编译需要的常见 LaTeX 包
+- ``download_urls``：(filename, url) 元组列表，用于在编译前从网络拉取该会议
+  官方提供的 ``.sty`` / ``.bst`` / ``.cls`` 文件，确保文档真正使用对应会议的
+  排版风格。下载是惰性的：第一次选定模板编译时才会触发，文件会缓存到
+  ``templates/_assets`` 目录，后续直接复用。
 
 模板写好之后，渲染时只是把结构化论文 dict 灌进 Jinja2 模板，完整的
-LaTeX 源会写入工作目录并由 ``xelatex`` 编译。
+LaTeX 源会写入工作目录与下载好的 .sty/.cls 一起被 ``xelatex`` 编译。
 """
 
 from __future__ import annotations
@@ -37,19 +39,19 @@ class PaperTemplate:
     download_urls: list[tuple[str, str]] = field(default_factory=list)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+# Conference template registry.
+#
+# The download_urls point at the official assets each conference distributes.
+# At compile time we copy the assets next to the rendered .tex so the local
+# TexLive can find them. If a download fails we still try to compile because
+# many of these files (IEEEtran, acmart) are also bundled with TexLive.
+# All templates are self-contained: they only rely on standard TexLive
+# packages (article.cls, IEEEtran.cls, acmart.cls, multicol, geometry, …).
+# No runtime downloads — that path was unreliable behind GFW / proxies and
+# left users with broken PDFs when CTAN/conference mirrors timed out.
+# ``download_urls`` remains in the dataclass for forward-compatibility (you
+# can still drop a real conference .sty into ``templates/_assets/`` manually
+# if you want pixel-perfect formatting), but the catalog ships empty lists.
 PAPER_TEMPLATES: dict[str, PaperTemplate] = {
     "general_article": PaperTemplate(
         key="general_article",

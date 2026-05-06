@@ -38,21 +38,21 @@ class OCRConfig:
             )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# Resolution order for LLMConfig fields:
+#   1. Whatever the caller explicitly passed (string, including the default).
+#   2. Environment variable (when nothing explicit was passed).
+#   3. Hard-coded default below.
+# We use ``None`` as the "unset" sentinel so an explicit ``model="deepseek-v3"``
+# passed by the caller is NEVER overwritten by a stale ``MODEL_NAME`` env entry.
+# (The previous "field == default-string" sentinel could not distinguish
+# "caller passed the default explicitly" from "caller passed nothing", which is
+# exactly how lab-forge's PaperForge integration was breaking: upstream passed
+# ``deepseek-v3`` but ``MODEL_NAME=ernie-4.5-turbo-128k-preview`` in .env
+# replaced it, causing AI Studio 40405 "暂不支持该模型".)
+#
+# 2026 年 AI Studio 把老的 ERNIE preview 系列从默认开放清单撤了下来，新付费
+# 账户走旧模型会拿到 40405。default 改成 ``deepseek-v3`` —— 它是当下 AI Studio
+# 现役免费/付费配额都开放的模型，独立 paper_forge 开箱即用，不再首发就 400。
 _LLM_DEFAULT_MODEL = "deepseek-v3"
 _LLM_DEFAULT_BASE_URL = "https://aistudio.baidu.com/llm/lmapi/v3"
 

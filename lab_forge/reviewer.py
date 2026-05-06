@@ -21,19 +21,19 @@ class ReviewResult:
     """Result of a review checkpoint."""
 
     passed: bool
-    score: float
+    score: float  # 0.0 to 1.0
     issues: list[str] = field(default_factory=list)
     suggestion: str = ""
-
-
-
-
+    # True when this result reflects an infrastructure failure (LLM call
+    # failed) rather than a genuine content review. Lets callers
+    # distinguish "the reviewer rejected the work" from "we never
+    # actually got a verdict because the API rejected our request".
     error: bool = False
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Review prompts
+# ---------------------------------------------------------------------------
 
 LITERATURE_REVIEW_PROMPT = """\
 你是一个科研评审员。请检查以下文献证据和 agent 的总结是否一致。
@@ -204,11 +204,11 @@ class Reviewer:
 
     def __init__(self, llm: ChatOpenAI, fallback_llm: ChatOpenAI | None = None):
         self.llm = llm
-
-
-
-
-
+        # ``fallback_llm`` is consulted exactly once per call when the primary
+        # reviewer LLM fails with an auth / model-permission style error
+        # (typically AI Studio rejecting a retired ERNIE 3.5/Speed model).
+        # Passing the agent's main LLM here is the recommended setup: if
+        # the agent can talk to the API at all, the reviewer can too.
         self.fallback_llm = fallback_llm
         self._fallback_active = False
         self._fallback_warned = False
@@ -284,14 +284,14 @@ class Reviewer:
           blocking ``passed=False`` result with the actual error so the
           agent loop and UI make it visible.
         """
-
+        # If we already migrated to the fallback this run, use it directly.
         active_llm = self.fallback_llm if self._fallback_active else self.llm
         try:
             response = active_llm.invoke(prompt)
             text = response.content if hasattr(response, "content") else str(response)
             return self._parse_review(text)
         except Exception as exc:
-
+            # Try the fallback exactly once on auth/model errors.
             if (
                 not self._fallback_active
                 and self.fallback_llm is not None
@@ -310,7 +310,7 @@ class Reviewer:
                     response = self.fallback_llm.invoke(prompt)
                     text = response.content if hasattr(response, "content") else str(response)
                     result = self._parse_review(text)
-
+                    # Record the silent fallback once so the UI can show why.
                     if not result.issues:
                         result.issues = []
                     return result
@@ -377,7 +377,7 @@ class Reviewer:
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass
 
-
+        # Fallback: try to determine pass/fail from free-form text.
         lower = text.lower()
         passed = "pass" in lower or "true" in lower
         return ReviewResult(

@@ -219,9 +219,9 @@ language_fix_prompt = ChatPromptTemplate.from_messages([
     ("human", LANGUAGE_FIX_TEMPLATE),
 ])
 
-
-
-
+# ──────────────────────────────────────────────────────────────────────
+# "Expand to top-conf style" rewrite — uses the style guide for context.
+# ──────────────────────────────────────────────────────────────────────
 
 EXPAND_SYSTEM_PROMPT = """\
 You are a senior academic writer trained on top-tier ML/AI conference papers
@@ -387,7 +387,7 @@ def _format_references_for_prompt(items: list[str] | None, max_chars: int = 8000
     total = 0
     for i, ref in enumerate(cleaned, start=1):
         line = f"  [{i}] {ref}"
-
+        # +1 for the trailing newline we'll add at join time.
         if total + len(line) + 1 > max_chars and lines:
             lines.append(
                 f"  ... ({len(cleaned) - i + 1} additional verified "
@@ -423,11 +423,11 @@ def _tables_preview(section: dict) -> str:
 HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*$")
 HORIZONTAL_RULE_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
 IMAGE_RE = re.compile(r"!\[(.*?)\]\((.*?)\)")
-
-
-
-
-
+# OCR backends like PaddleOCR-VL emit images as raw HTML ``<img src="...">``
+# (often wrapped in a ``<div style="text-align:center">``) instead of the
+# Markdown ``![](path)`` form. We detect both. ``src`` may be a remote URL
+# (with signed query string) or a local filename, both are routed to the
+# per-figure download/copy step downstream.
 HTML_IMG_RE = re.compile(
     r"""<img\s+[^>]*?src\s*=\s*["']([^"']+)["'][^>]*?(?:/\s*>|>\s*</img\s*>|>)""",
     re.IGNORECASE,
@@ -438,8 +438,8 @@ HTML_IMG_ALT_RE = re.compile(
 )
 HTML_DIV_OPEN_RE = re.compile(r"^\s*<div\b[^>]*>\s*$", re.IGNORECASE)
 HTML_DIV_CLOSE_RE = re.compile(r"^\s*</div\s*>\s*$", re.IGNORECASE)
-
-
+# ``$$ ... $$`` display math, possibly on a single OCR line. The parser
+# also recognises multi-line blocks below in the streaming loop.
 DISPLAY_MATH_LINE_RE = re.compile(r"^\s*\$\$\s*(.+?)\s*\$\$\s*$")
 DISPLAY_MATH_OPEN_RE = re.compile(r"^\s*\$\$\s*$")
 KEYWORDS_RE = re.compile(
@@ -524,11 +524,11 @@ def _invoke_chain_with_retry(chain, payload: dict, label: str) -> str:
     raise RuntimeError(f"{label} failed after retries")
 
 
-
-
-
-
-
+# Markdown→LaTeX normalizer. Detects raw LaTeX commands that escaped the
+# expand prompt's "math MUST be inside $..$" rule and re-asks an LLM to
+# wrap them. The detector is intentionally over-eager (false positives
+# just cost one extra LLM call; false negatives leave broken math in the
+# PDF), so we list every common math command rather than try to be clever.
 _RAW_LATEX_MATH_COMMAND_NAMES = (
     "frac", "sum", "prod", "int", "min", "max", "sqrt",
     "hat", "bar", "tilde", "vec", "dot", "ddot",
@@ -614,11 +614,11 @@ def _normalize_to_latex_safe_markdown(
     return normalized
 
 
-_RESIDUAL_CJK_THRESHOLD = 30
-
-_RESIDUAL_LATIN_THRESHOLD = 200
-
-
+_RESIDUAL_CJK_THRESHOLD = 30  # P3: more than this much CJK in a section
+                              # targeting English == force a normalize pass.
+_RESIDUAL_LATIN_THRESHOLD = 200  # Same idea for a Chinese-target run, but
+                                 # we accept much more Latin because tech
+                                 # papers always cite English terms / formulas.
 
 
 def _needs_language_normalization(text: str, target_language_code: str) -> bool:
@@ -637,18 +637,18 @@ def _needs_language_normalization(text: str, target_language_code: str) -> bool:
     if detected != target_language_code:
         return True
 
-
-
-
+    # Same target language overall — but check for stray content from
+    # the wrong language. Imported here to avoid a top-level circular
+    # import; ``utils`` does not import this module so this is safe.
     from .utils import CJK_RE, LATIN_RE
     if target_language_code == "en":
         cjk_count = len(CJK_RE.findall(text))
         return cjk_count > _RESIDUAL_CJK_THRESHOLD
     if target_language_code == "zh":
         latin_count = len(LATIN_RE.findall(text))
-
-
-
+        # Higher threshold: Chinese papers legitimately quote English
+        # terms (e.g. "Transformer", method names), so we only flag
+        # very obvious leftover English paragraphs.
         return latin_count > _RESIDUAL_LATIN_THRESHOLD
     return False
 
@@ -659,10 +659,10 @@ _CODE_FENCE_LANGS = {
     "python", "py", "bash", "sh", "shell", "javascript", "js", "typescript",
     "ts", "java", "cpp", "c", "r", "sql", "json", "yaml", "toml",
 }
-
-
-
-
+# Same hardening as latex_renderer._CODE_LIKE_LINE_RE — see the comment
+# there. The old substring-anchored version killed academic prose lines
+# whenever they happened to contain " class", " from", " for", " if",
+# etc. as English words.
 _CODE_LIKE_LINE_RE = re.compile(
     r"^\s*(?:"
     r"import\s+\w"
@@ -678,13 +678,13 @@ _CODE_LIKE_LINE_RE = re.compile(
     r"|np\.|pd\.|plt\.|torch\.|sklearn\.|\.append\(|==\s|:=\s|print\("
 )
 
-
-
-
-
-
-
-
+# P2 fix: display-math blocks (\[...\] / \begin{equation}...) coming out of
+# the LLM expansion are routinely glued into the middle of a paragraph, e.g.
+#     "...polished methodology section: \[f_\theta(x) = W_2\sigma(...)\] where ..."
+# xelatex compiles the LaTeX correctly but the visual layout collapses
+# because display math wants its own paragraph. We force a blank line on
+# each side so the renderer treats it as a standalone displayed equation.
+# Inline math \(...\) is intentionally NOT touched — it belongs in-paragraph.
 _DISPLAY_MATH_BRACKET_RE = re.compile(r"\\\[.*?\\\]", re.DOTALL)
 _DISPLAY_MATH_ENV_RE = re.compile(
     r"\\begin\{(equation|align|gather|displaymath|eqnarray|multline)\*?\}"
@@ -693,10 +693,10 @@ _DISPLAY_MATH_ENV_RE = re.compile(
     re.DOTALL,
 )
 
-
-
-
-
+# P4 fix: LLMs sometimes emit document-level LaTeX preamble commands inline
+# in section prose (we saw \title{...} on line 33 of trajectory c032bbf1's
+# paper.tex). The renderer's own template owns these; section prose must
+# not. We drop the entire offending line.
 _LATEX_META_LINE_RE = re.compile(
     r"^\s*\\(?:"
     r"title|author|date|maketitle|documentclass|usepackage|"
@@ -755,35 +755,35 @@ def _strip_outer_markdown_fence(text: str) -> str:
     return text.strip()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+# R1: ``\{}xyz`` -> ``\xyz``. Match the literal three-char sequence
+# ``\{}`` when it is immediately followed by anything that could be the
+# start of a real LaTeX command:
+#   - letters: ``\{}min``, ``\{}textbf``, ``\{}sigma`` (named commands)
+#   - brackets: ``\{}[`` (open display math), ``\{}]`` (close),
+#     ``\{}(``, ``\{}{``, ``\{}}``
+#   - punctuation that LaTeX accepts as a single-char command:
+#     ``\,`` ``\;`` ``\:`` ``\!`` ``\|`` (spacing / norm symbol),
+#     ``\\`` (linebreak — unusual at line end but seen in tabular cells)
+# Trailing ``\{}`` at the very end of a sentence (no follower) is left
+# alone since it might be a legitimate decorative empty-group rather
+# than a self-escape.
 _LLM_SELF_ESCAPED_BACKSLASH_RE = re.compile(
     r"\\\{\}(?=[A-Za-z\[\]\(\)\{\}\|,;:!\\])"
 )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+# R2 (paper_writer half): convert LLM-emitted text-formatting LaTeX
+# commands back into Markdown so the existing markdown→LaTeX pipeline in
+# latex_renderer handles them through ``_MD_INLINE_PATTERNS``. This way
+# the paragraph stays in the "prose" path (escape_latex applied to
+# everything outside math), while the formatting still survives — instead
+# of the LLM's literal ``\textbf{...}`` getting escape-mangled into
+# ``\textbackslash\{\}textbf\{...\}`` (the c032bbf1 / 80ef0f0e bug).
+#
+# Limited to single-level argument: ``\textbf{nested \textit{...}}`` would
+# require balanced-brace matching. We accept the rare miss; the latex
+# renderer's R2 half (allowlist-protected commands) catches the more
+# important inline-link / citation commands.
 _LATEX_TO_MARKDOWN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\\textbf\{([^{}\n]+?)\}"), r"**\1**"),
     (re.compile(r"\\textit\{([^{}\n]+?)\}"), r"*\1*"),
@@ -831,32 +831,32 @@ def _undo_llm_self_escape(text: str) -> str:
     return _LLM_SELF_ESCAPED_BACKSLASH_RE.sub(r"\\", text)
 
 
-
-
-
-
+# R3: an LLM asked to "rewrite this section" routinely opens with a
+# meta-narration like ``Here is the polished methodology section ...:``
+# before getting to the actual prose. Drop those leading phrases so they
+# don't leak into the rendered PDF as the first sentence of the section.
 _LLM_PREFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
-
-
-
-
-
-
-
+    # English: "Here is/are/'s the [...descriptors...] <section_name> ...:".
+    # The descriptor block is *any* sequence of up to 4 short words
+    # (≤ 18 chars each, no punctuation other than hyphens) sitting
+    # between "the/an/a" and the section noun. This covers multi-word
+    # descriptors the strict allowlist missed: "academic prose version",
+    # "expanded 1100-word", "polished publication-ready", etc.
+    # We anchor on the section noun + colon so this can't run away.
     re.compile(
         r"^\s*here(?:\s*['’`]\s*s|\s*['’`]\s*re|\s+(?:is|are|was|were))\s+"
         r"(?:the|an|a|my|your)?\s*"
-
-
-
-
-
+        # Up to 6 short tokens (numbers, hyphenated descriptors, markdown
+        # bold like ``**Methodology**``, "of", "the", etc.) sit between
+        # the article and the section noun. Each token is ≤ 24 chars;
+        # allowing ``*`` handles markdown wrappers from real traces
+        # ("expanded **Analysis & Discussion** section").
         r"(?:[\w\-*&]{1,24}\s+){0,6}"
-
-
-
-
-
+        # Section nouns + length / form descriptors. Adding
+        # ``version|draft|revision|rewrite|expansion`` covers leaks like
+        # "Here is the expanded 800-word version ...:" seen in trajectory
+        # 5bfb6c8d, where the strict section-noun list missed the trailing
+        # noun ``version`` and the whole meta-prose escaped into the PDF.
         r"(?:abstract|introduction|related\s+work|background|method(?:ology)?|"
         r"experimental\s+setup|setup|results?|experiments?|analysis|discussion|"
         r"conclusion|section|paragraph|passage|"
@@ -864,7 +864,7 @@ _LLM_PREFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"[^:\n]{0,200}:\s*",
         re.IGNORECASE,
     ),
-
+    # Chinese counterparts seen in real traces ("以下是改写后的方法部分：" etc.)
     re.compile(
         r"^\s*(?:以下是|这里是|下面是)[^：\n]{0,80}(?:版本|章节|部分|段落)?[：:]\s*",
     ),
@@ -893,20 +893,20 @@ def _strip_llm_meta_prefix(text: str) -> str:
     return text
 
 
-
-
-
-
-
+# Trailing meta-prose the writer LLM tacks onto a section: word-count
+# annotations, self-reflective change-logs, Chinese "math appendix" hints.
+# These leaked into trajectory 5bfb6c8d's final PDF as ``*Word count: 1,128*``
+# and a numbered "This revision expands the discussion by:" block under the
+# Conclusion. None of them are actual content.
 _LLM_SUFFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
-
+    # ``*Word count: 1,128*`` — italic-wrapped single-line counter at EOF.
     re.compile(
         r"(?:\n+|\A)\s*\*?\s*(?:Word\s+count|字数(?:统计)?)\s*[:：][^\n]*\*?\s*\Z",
         re.IGNORECASE,
     ),
-
-
-
+    # English self-reflective tail: "This revision/version/expansion expands /
+    # adds / introduces ..." possibly preceded by an HR. Eats to EOF so
+    # numbered-list reflection blocks don't bleed into the PDF.
     re.compile(
         r"(?:\n+(?:---+\s*\n+)?)"
         r"(?:This\s+(?:revision|expansion|version|rewrite|update)\s+"
@@ -914,16 +914,16 @@ _LLM_SUFFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"[\s\S]+\Z",
         re.IGNORECASE,
     ),
-
+    # Chinese trailing self-reflection ("本次扩写..." / "本版本添加...").
     re.compile(
         r"(?:\n+(?:---+\s*\n+)?)"
         r"(?:本次|本版本|这次|这版)(?:修订|改写|扩写|更新|改写后)"
         r"(?:在|添加|引入|增强|加入|强化)"
         r"[\s\S]+\Z",
     ),
-
-
-
+    # Chinese meta hint that introduces a placeholder math block:
+    # "数学补充（根据需要嵌入）：\n$$ ... $$"
+    # Keep math elsewhere; just remove this orphaned appendix.
     re.compile(
         r"\n+数学补充\s*[（(][^）)]*[）)]\s*[:：]\s*\n+\$\$[\s\S]+?\$\$\s*\Z",
     ),
@@ -935,8 +935,8 @@ def _strip_llm_meta_suffix(text: str) -> str:
     if not text:
         return text
     cleaned = text
-
-
+    # Apply repeatedly so a section ending with both a word-count line AND
+    # a change-log paragraph drops both, regardless of order.
     for _ in range(len(_LLM_SUFFIX_PATTERNS)):
         before = cleaned
         for pattern in _LLM_SUFFIX_PATTERNS:
@@ -948,23 +948,23 @@ def _strip_llm_meta_suffix(text: str) -> str:
 
 def _clean_llm_section_output(text: str) -> str:
     """Remove Markdown/code artifacts that should never reach the PDF."""
-
-
-
+    # R1: undo the LLM's "self-escape" pattern \\{}command -> \\command
+    # before any other processing, so downstream regex passes (display-math
+    # isolation, latex_renderer.protect_math) can recognize real LaTeX.
     text = _undo_llm_self_escape(text or "")
-
-
+    # R3: strip the "Here is the polished ... section:" meta-narration so
+    # it doesn't become the first sentence of the rendered paper.
     text = _strip_llm_meta_prefix(text)
-
-
-
+    # R3b: strip trailing meta-prose (``*Word count: 1,128*`` / ``This
+    # revision expands by ...`` / 数学补充：…). Trajectory 5bfb6c8d shipped
+    # all three of these into the final PDF.
     text = _strip_llm_meta_suffix(text)
     text = _strip_outer_markdown_fence(text)
     if not text:
         return ""
-
-
-
+    # R2 (paper_writer half): convert text-formatting LaTeX back to
+    # Markdown so the renderer's markdown path handles it. Done here, after
+    # the fence/prefix strip, so the conversion sees only real prose.
     text = _convert_inline_latex_to_markdown(text)
 
     cleaned_lines: list[str] = []
@@ -996,12 +996,12 @@ def _clean_llm_section_output(text: str) -> str:
 
     cleaned = "\n".join(cleaned_lines).strip()
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-
-
+    # P4: drop document-level LaTeX preamble commands the LLM sometimes
+    # emits inside section prose.
     cleaned = _strip_latex_meta_lines(cleaned)
-
-
-
+    # P2: wrap display-math blocks in blank lines so xelatex renders them
+    # as standalone centred equations rather than glueing them into the
+    # middle of the surrounding paragraph.
     cleaned = _isolate_display_math(cleaned)
     return cleaned.strip()
 
@@ -1307,7 +1307,7 @@ def parse_markdown_paper(markdown_text: str, image_names: list[str]) -> dict:
             line_idx += 1
             continue
 
-
+        # ── Display math: ``$$ ... $$`` on a single line ──────────────────
         single_math = DISPLAY_MATH_LINE_RE.match(stripped)
         if single_math:
             flush_paragraph()
@@ -1318,7 +1318,7 @@ def parse_markdown_paper(markdown_text: str, image_names: list[str]) -> dict:
             line_idx += 1
             continue
 
-
+        # ── Display math: ``$$`` then content lines then ``$$`` ────────────
         if DISPLAY_MATH_OPEN_RE.match(stripped):
             flush_paragraph()
             flush_table()
@@ -1341,16 +1341,16 @@ def parse_markdown_paper(markdown_text: str, image_names: list[str]) -> dict:
                 )
                 line_idx = j
                 continue
+            # Unclosed ``$$`` — treat the opener as plain text and continue.
 
-
-
-
-
+        # ── HTML ``<img>`` (PaddleOCR-VL emits these instead of ``![]()``) ──
+        # The OCR markdown often wraps the image in a ``<div>``; absorb the
+        # wrapper too so the URL doesn't leak into the prose.
         if HTML_DIV_OPEN_RE.match(line) and line_idx + 1 < len(lines):
             inner_line = lines[line_idx + 1].rstrip("\n")
             inner_image = _extract_html_image(inner_line)
             if inner_image is not None:
-
+                # If the next-next line is a closing div, eat all three.
                 consume_to = line_idx + 2
                 if (
                     consume_to < len(lines)
@@ -1369,13 +1369,13 @@ def parse_markdown_paper(markdown_text: str, image_names: list[str]) -> dict:
                 line_idx = consume_to
                 continue
 
-
+        # Bare ``<img>`` line, possibly wrapped in a same-line ``<div>``.
         bare_image = _extract_html_image(line)
         if bare_image is not None and not stripped.startswith("<!--"):
-
-
-
-
+            # Strip the matched ``<img>`` and any surrounding ``<div>`` /
+            # ``</div>`` wrapper (which OCR backends like PaddleOCR-VL emit
+            # on the same line). If what's left is just whitespace, treat
+            # the whole line as a figure block.
             without_tag = HTML_IMG_RE.sub("", line, count=1)
             without_tag = re.sub(r"<div\b[^>]*>", "", without_tag, flags=re.IGNORECASE)
             without_tag = re.sub(r"</div\s*>", "", without_tag, flags=re.IGNORECASE)
@@ -1661,11 +1661,11 @@ def _expand_sections(
     parser = StrOutputParser()
     expand_chain = expand_prompt | llm | parser
     language_fix_chain = language_fix_prompt | llm | parser
-
-
-
-
-
+    # LaTeX-safe normalizer: enforces the markdown subset our renderer can
+    # convert losslessly. Runs as a separate LLM pass per section so the
+    # main expand prompt can stay focused on content quality while this
+    # one obsesses over math wrapping / banned commands. See
+    # ``_normalize_to_latex_safe_markdown`` for the gate logic.
     latex_safe_chain = latex_safe_normalize_prompt | llm | parser
 
     blueprints = scaled_blueprints(target_total_words)
@@ -1691,7 +1691,7 @@ def _expand_sections(
             target_language_name,
         )
 
-
+    # 1. Expand the abstract first (its own blueprint).
     abstract_bp = blueprint_for_in("abstract", blueprints) or blueprints[0]
     abstract = (paper.get("abstract") or "").strip()
     if abstract:
@@ -1718,7 +1718,7 @@ def _expand_sections(
         except Exception as exc:
             logger.warning("Failed to expand abstract: %s", exc)
 
-
+    # 2. Expand each body section.
     has_sent_request = bool(abstract)
     fallback_kind_order = (
         "introduction", "related_work", "preliminaries",
@@ -1735,8 +1735,8 @@ def _expand_sections(
 
         bp = blueprint_for_in(heading, blueprints)
         if bp is None:
-
-
+            # No alias match — use the next blueprint in canonical order so
+            # unlabeled sections still get a sensible expansion target.
             kind = fallback_kind_order[
                 min(fallback_idx, len(fallback_kind_order) - 1)
             ]
@@ -1814,15 +1814,15 @@ def _expand_one_section(
         expand_chain, payload, f"expand section '{blueprint.kind}'",
     ).strip()
 
-
-
-
-
-
-
-
-
-
+    # Note: we deliberately do NOT retry-if-too-short here. The previous
+    # version sent a "your output is too short, please expand" follow-up
+    # whenever the LLM's response fell below ``blueprint.minimum_words``,
+    # which directly forced the model to invent stats / citations to
+    # reach the word target when the input fact-pack didn't have enough
+    # raw material. ``target_words`` is now treated strictly as an upper
+    # bound: a 400-word honest section is preferred over a 1000-word
+    # padded one. If a section comes back unusably short, the right fix
+    # is upstream (give the agent more time to gather facts), not here.
     if _word_count(rewritten) < blueprint.minimum_words:
         logger.info(
             "Section '%s' came back short (%d < %d) — accepting as-is "

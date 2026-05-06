@@ -91,13 +91,13 @@ def _to_langchain_messages(messages: list[dict[str, str]]) -> list:
 
 def extract_json_from_response(text: str) -> dict | None:
     """Best-effort JSON extraction from LLM response."""
-
+    # Try direct parse
     try:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         pass
 
-
+    # Try extracting from ```json ... ``` code blocks
     match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if match:
         try:
@@ -105,14 +105,14 @@ def extract_json_from_response(text: str) -> dict | None:
         except json.JSONDecodeError:
             pass
 
-
+    # Try repairing common issues (trailing commas)
     cleaned = re.sub(r",\s*([}\]])", r"\1", text)
     try:
         return json.loads(cleaned)
     except (json.JSONDecodeError, TypeError):
         pass
 
-
+    # Try finding the first { ... } block
     brace_match = re.search(r"\{.*\}", text, re.DOTALL)
     if brace_match:
         try:

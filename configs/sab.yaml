@@ -1,0 +1,24 @@
+# LabForge config for ScienceAgentBench
+# Greedy baseline (no PRM)
+
+llm:
+  model: "MiniMax-M2.7"
+  api_key: ""              # Set via API_KEY env var, env.txt, or .env
+  base_url: "https://api.minimaxi.com/v1"
+  temperature: 0.0
+  max_tokens: 4096
+  timeout: 180             # longer timeout for complex tasks
+
+sandbox:
+  backend: "subprocess"
+  timeout: 600             # 10 min per code execution (SAB tasks can be heavy)
+  max_output_length: 10000
+  working_dir: "/tmp/lab_forge_sab_workspace"
+
+prm:
+  enabled: false
+
+max_steps: 40              # SAB tasks may need more steps
+record_trajectory: true
+trajectory_dir: "./sab_trajectories"
+verbose: true

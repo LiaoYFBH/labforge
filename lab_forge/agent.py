@@ -46,11 +46,11 @@ from .trajectory import Trajectory
 logger = logging.getLogger(__name__)
 
 
-
-
-
-
-
+# Reviewer feedback that mentions any of these signals is treated as an
+# experiment-class issue: the agent should fix code/data, not regenerate the
+# report. Patterns are case-insensitive substring matches against the raw
+# feedback text. Bilingual on purpose because the AI Studio reviewer mixes
+# Chinese and English in the same response.
 _EXPERIMENTAL_FEEDBACK_SIGNALS = (
     "nan",
     "非有限",
@@ -66,9 +66,9 @@ _EXPERIMENTAL_FEEDBACK_SIGNALS = (
     "loss值为-",
     "损失值为-",
     "数值不稳定",
-    "instabil",
+    "instabil",   # instability / unstable
     "unstable",
-    "diverg",
+    "diverg",     # divergent / diverge
     "数值发散",
     "梯度爆炸",
     "gradient explod",
@@ -83,14 +83,14 @@ _EXPERIMENTAL_FEEDBACK_SIGNALS = (
     "did not converge",
 )
 
-
-
-
-
-
-
+# Reviewer feedback classed as ``scope`` means "you haven't done what the task
+# asked" — missing baselines, no novel algorithm, perfect-too-good metrics on
+# toy data, etc. The remedy is more experimental work (or more literature
+# review), NOT another generate_report iteration. We keep this list
+# high-precision: each phrase clearly accuses a scope/task-fulfillment gap
+# rather than a wording or numerical problem (those have their own classes).
 _SCOPE_FEEDBACK_SIGNALS = (
-
+    # "you didn't build / didn't compare what the task required"
     "未开发",
     "未实现",
     "未对比",
@@ -110,18 +110,18 @@ _SCOPE_FEEDBACK_SIGNALS = (
     "did not compare",
     "did not test",
     "did not validate",
-
-
+    # comparison-quality complaints (caught from real trajectories where
+    # the agent compared two existing methods but didn't address novelty)
     "对比不充分",
     "对比不足",
     "缺乏对比",
     "对比实验不充分",
     "对比实验不足",
-    "全面对比",
+    "全面对比",          # 通常出现在「未能展示与基线方法的全面对比」上下文
     "完整的基线",
     "完整对比",
     "缺乏完整",
-
+    # "task goal not (fully) reached" — common phrasing variants
     "未达到目标",
     "未达到预期",
     "任务目标未完全完成",
@@ -131,13 +131,13 @@ _SCOPE_FEEDBACK_SIGNALS = (
     "未达标",
     "部分完成但未",
     "任务目标部分完成",
-
+    # "didn't propose / didn't innovate" — direct novelty gap signals
     "未提出新方法",
     "未提出新算法",
     "未提出创新",
-    "未提出.*创新",
+    "未提出.*创新",       # regex-flavored substring; ``in`` check still works
     "未设计新",
-
+    # "did not prove the method's superiority"
     "未证明优越性",
     "未证明方法优越性",
     "未能证明",
@@ -146,7 +146,7 @@ _SCOPE_FEEDBACK_SIGNALS = (
     "did not outperform",
     "未超越基线",
     "未超过基线",
-
+    # over-fit / toy-data signals (reviewer flagging "results too good to be true")
     "完美指标",
     "perfect metric",
     "perfect precision",
@@ -160,18 +160,18 @@ _SCOPE_FEEDBACK_SIGNALS = (
     "over-fitting",
     "over fit",
     "过拟合模型",
-
+    # "no validation on real data"
     "未验证真实",
     "缺乏对真实数据",
     "缺乏对真实世界",
     "未在真实数据集",
-
+    # "no innovation / not novel"
     "缺乏创新",
     "缺乏新颖",
     "no novelty",
     "lacks innovation",
     "lacks novelty",
-
+    # explicit experimental-design complaint
     "实验设计缺陷",
     "experiment design flaw",
 )
@@ -202,11 +202,11 @@ def _classify_reviewer_feedback(feedback: str) -> str:
     return "writing"
 
 
-
-
-
-
-
+# Path B (honest negative-result framing) is gated so the agent can't escape
+# debugging by declaring failure too early. It only becomes mentionable after
+# enough blocks AND enough real debugging effort. These knobs are intentionally
+# strict — the goal is for the agent to actually solve the problem; Path B is
+# a last-resort safety valve, not a peer option.
 _PATH_B_UNLOCK_BLOCK = 5
 _PATH_B_MIN_EXEC_ATTEMPTS = 3
 
@@ -314,7 +314,7 @@ def _compose_submit_block_message(
             "have, run execute_code first to produce it."
         )
 
-
+    # Blocks 3+. Build the diagnosis once.
     if feedback_class == "experimental":
         diagnosis = (
             "The reviewer keeps flagging the SAME class of EXPERIMENTAL issue "
@@ -338,9 +338,9 @@ def _compose_submit_block_message(
             "evidence the reviewer is asking for is missing from the workspace."
         )
 
-
-
-
+    # Blocks 3, 4: Path A only. No Path B mention; the agent should be
+    # debugging, not negotiating an exit. Add cumulatively sharper concrete
+    # debug suggestions so each block contributes new information.
     if block_count < _PATH_B_UNLOCK_BLOCK:
         if feedback_class == "scope":
             debug_steps = (
@@ -382,7 +382,7 @@ def _compose_submit_block_message(
                 "You have been blocked 3 times. The first two rounds didn't "
                 "fix the underlying issue."
             )
-        else:
+        else:  # block_count == 4
             preface = (
                 "You have been blocked 4 times. So far you keep landing on "
                 "the same failure mode. STOP and break the pattern: a "
@@ -397,7 +397,7 @@ def _compose_submit_block_message(
             "shows the issue is resolved. There is no shortcut."
         )
 
-
+    # Block 5+. Decide whether Path B is unlocked based on debugging effort.
     path_b_earned = exec_attempts_since_first_block >= _PATH_B_MIN_EXEC_ATTEMPTS
 
     if not path_b_earned:
@@ -414,12 +414,12 @@ def _compose_submit_block_message(
             "numbers. No more generate_report / submit_result until then."
         )
 
-
-
-
-
-
-
+    # Path B unlocked: lead with Path A, present Path B only as last resort
+    # with explicit qualifications about when it applies. The Path A and Path
+    # B copy is class-specific — for "scope" issues, Path A means doing the
+    # missing experimental work (not a debug fix), and Path B is a negative
+    # result framing that quantifies WHY the task spec was unreachable rather
+    # than a numerical-failure characterization.
     if feedback_class == "scope":
         path_a_block = (
             "PATH A — DO THE MISSING WORK (still the right answer if there's "
@@ -515,8 +515,8 @@ class ResearchAgent:
         self.enable_phase_hints = enable_phase_hints
         self.sandbox = Sandbox(config.sandbox)
 
-
-
+        # Backward-compatible guardrail state used by older unit tests and by
+        # callers that still inspect the pre-LangGraph agent surface.
         self._phase_actions: dict[str, int] = {
             "literature": 0,
             "implementation": 0,
@@ -527,25 +527,25 @@ class ResearchAgent:
         self._literature_failures = 0
         self._literature_surnames: set[str] = set()
 
-
+        # Create LLM instances
         self.agent_llm = create_chat_model(config.agent_model)
 
-
-
-
-
-
-
+        # Create reviewer (if enabled). Pass the agent's main LLM as a
+        # fallback: if the configured reviewer model is rejected by the
+        # provider (e.g. AI Studio retired ERNIE 3.5/Speed/Lite/Tiny in
+        # 2026 and returns invalid_model), the reviewer auto-migrates to
+        # the agent LLM for the rest of the run instead of silently going
+        # dark and letting hallucinated work ship.
         self.reviewer: Reviewer | None = None
         if config.reviewer.enabled:
             reviewer_llm = create_chat_model(config.reviewer.model)
             self.reviewer = Reviewer(reviewer_llm, fallback_llm=self.agent_llm)
 
-
-
-
-
-
+        # Create tools (optionally restrict the set for benchmark runs).
+        # We reuse the main agent model as the per-section "writer" LLM
+        # inside generate_report so the tool can do outline → per-section
+        # expansion automatically. The agent only sees a single tool call;
+        # the multi-LLM-call expansion happens inside the tool.
         self.submit_tool = SubmitResultTool()
         self.tools, self.submit_tool = create_all_tools(
             sandbox=self.sandbox,
@@ -557,7 +557,7 @@ class ResearchAgent:
             search_quota=int(getattr(config, "search_quota", 0) or 0),
         )
 
-
+        # Build the LangGraph react agent with MemorySaver for state persistence
         if system_prompt is None:
             system_prompt = SYSTEM_PROMPT + "\n\n" + STEP_FORMAT_HINT
         self.checkpointer = MemorySaver()
@@ -637,14 +637,14 @@ class ResearchAgent:
         Because MemorySaver is used, the graph accumulates all messages
         across rounds under the same thread_id.
         """
-
-
-
-
+        # In the ReAct loop, the agent node emits reasoning (AIMessage.content)
+        # BEFORE the corresponding tool call runs. We carry that reasoning in
+        # pending_thought and attach it to the next tool step — so the UI shows
+        # "why I am about to run this tool," not a blank thought.
         pending_thought = ""
-
-
-
+        # tool_call_id -> {"name": str, "args": dict} captured from the
+        # agent node. Used to surface the actual code / bash / file_write
+        # payload on the corresponding tool step in the UI.
         pending_tool_args: dict[str, dict] = {}
 
         def _step_limit_reached() -> bool:
@@ -682,8 +682,8 @@ class ResearchAgent:
                             success=not is_error,
                             metadata={"exec_time_s": 0.0},
                         )
-
-
+                        # Consume the thought so the next tool in the same
+                        # round (rare but possible) doesn't reuse it.
                         pending_thought = ""
 
                         if phase_tracker is not None:
@@ -711,9 +711,9 @@ class ResearchAgent:
                         content = msg.content if hasattr(msg, "content") else ""
                         tool_calls = getattr(msg, "tool_calls", None) or []
 
-
-
-
+                        # Record the args of each outgoing tool call so the
+                        # corresponding ToolMessage can surface them on the UI
+                        # (e.g. the actual `code` that execute_code will run).
                         for tc in tool_calls:
                             if isinstance(tc, dict):
                                 tc_id = tc.get("id")
@@ -733,12 +733,12 @@ class ResearchAgent:
                         if not text:
                             continue
 
-
-
-
-
-
-
+                        # A "substantive" reasoning block gets its own "plan"
+                        # card so the user sees the research plan before the
+                        # tool action — even when the agent produced the plan
+                        # in the same message as the tool call. Heuristic:
+                        # long text, multi-line text, or text that looks like
+                        # structured planning (phase headers, numbered lists).
                         is_long = len(text) >= 200
                         is_multiline = text.count("\n") >= 2
                         looks_structured = any(
@@ -773,18 +773,18 @@ class ResearchAgent:
                                     "observation": "",
                                     "success": True,
                                 })
-
-
-
-
+                            # If this AI message also contains tool calls,
+                            # let the matching ToolMessages run before pausing;
+                            # stopping here would leave pending tool calls in
+                            # the LangGraph thread and poison the next round.
                             if not tool_calls and _step_limit_reached():
                                 return "soft_step_budget_reached"
-
-
+                            # The plan card already carries the reasoning, so
+                            # don't duplicate it on the next tool card.
                             pending_thought = ""
                         else:
-
-
+                            # Short, one-line reasoning — keep it inline on
+                            # the next tool card rather than adding a card.
                             pending_thought = text
 
             if self.submit_tool.submitted:
@@ -810,10 +810,10 @@ class ResearchAgent:
         """
         self.submit_tool.reset()
 
-
-
-
-
+        # P5 fix: forward task_description into the per-task tool state so
+        # ``GenerateReportTool._validate_experiment_evidence`` can detect
+        # SURVEY ONLY mode and skip the figure / table requirement (which
+        # would otherwise force the agent to fabricate a placeholder.png).
         for _tool in self.tools:
             inner = getattr(_tool, "_lab_forge_inner", None)
             if inner is not None and hasattr(inner, "task_description"):
@@ -839,13 +839,13 @@ class ResearchAgent:
             else None
         )
 
-
-
-
-
-
-
-
+        # Goal-anchoring (Mod D): one-shot LLM call at run start parses the
+        # task description into a verifiable checklist of 3-5 concrete required
+        # artifacts. The checklist is then re-evaluated every 5 rounds and
+        # injected as the first item in each round's HumanMessage so the agent
+        # never loses sight of the original task spec — even after dozens of
+        # rounds of intermediate work and reviewer feedback. Empty checklist
+        # (parse failed / trivial task) silently disables the anchoring.
         task_checklist: TaskChecklist = parse_task_checklist(task_description, self.agent_llm)
         if task_checklist.items:
             trajectory.metadata["task_checklist"] = {
@@ -854,18 +854,18 @@ class ResearchAgent:
                     for i in task_checklist.items
                 ],
             }
-
-
-
-
-
+        # Re-inject the static topic-anchor reminder every TOPIC_REMINDER_INTERVAL
+        # rounds. The reminder is filesystem-verified and LLM-free (see
+        # task_checklist.format_topic_reminder), so unlike the old
+        # evaluate_checklist_status path it cannot flip turn-to-turn and
+        # cannot deadlock submit_result.
         TOPIC_REMINDER_INTERVAL = 5
 
-
-
-
-
-
+        # Pull the original topic out of the task_description so the reminder
+        # block can show it verbatim. ``topic_to_task`` writes
+        # ``"Research Topic: <topic>\n\n"`` as the first line; if the caller
+        # bypassed it (e.g. raw --task in main.py), we fall back to the
+        # first non-empty line as a best-effort topic.
         original_topic = ""
         for raw_line in (task_description or "").splitlines():
             line = raw_line.strip()
@@ -877,10 +877,10 @@ class ResearchAgent:
             original_topic = line
             break
 
-
-
-
-
+        # Recover the run mode from the [MODE: …] banner that ``topic_to_task``
+        # injects, so the topic reminder can issue the experiment-only
+        # thin-workspace warning. Raw --task runs that don't include the
+        # banner default to "survey" (the safer branch — no false alarms).
         if "[MODE: EXPERIMENT" in (task_description or ""):
             original_mode = "experiment"
         else:
@@ -896,16 +896,16 @@ class ResearchAgent:
                 checkpoints=self.config.reviewer.checkpoints,
             )
 
-
-
-
-
-
-
-
-
-
-
+        # Each run gets a unique thread so MemorySaver doesn't mix tasks.
+        #
+        # ``recursion_limit`` is the hard wall LangGraph imposes on the
+        # number of (think → tool → observe) micro-steps it will execute.
+        # A single visible "Step N" in the UI typically consumes 3-4
+        # recursion units (one for the AI message, one per tool call, one
+        # for the tool response). ``max_steps * 2`` was therefore cutting
+        # the agent off mid-plan around step ~30 even when the user asked
+        # for 50; bumping to ``× 6`` plus a 200-floor gives the run room
+        # to reach actual completion before LangGraph kills the graph.
         def _new_thread_config() -> dict:
             tid = f"{task_id}_{uuid.uuid4().hex[:8]}"
             return {
@@ -916,97 +916,97 @@ class ResearchAgent:
         thread_config = _new_thread_config()
         thread_id = thread_config["configurable"]["thread_id"]
 
-
+        # First round: send the task prompt
         current_input = {"messages": [HumanMessage(content=task_prompt)]}
 
         logger.info("Starting task: %s (thread: %s)", task_id, thread_id)
 
-
-
-
+        # Adaptive injection rounds prevent both premature fixed-round exits
+        # and unbounded loops. The step budget may extend the soft budget when
+        # recent work is productive, but the hard cap stays finite.
         max_rounds = step_budget.max_rounds
         nudged_rounds = 0
         max_nudges = step_budget.max_nudges
-
-
-
-
-
-
-
-
-
+        # Narration-spiral guard (regression fix). When the LLM responds with
+        # markdown code blocks in its reasoning text but never emits an actual
+        # tool_call, the round produces zero non-plan trajectory steps. Pre-Mod-D
+        # this was implicitly handled by the "if not injections: continuation
+        # nudge" branch — but Mod D's checklist injection always populates
+        # ``injections``, so the nudge stopped firing. We track narration-only
+        # rounds explicitly here and prepend a strong format-violation message
+        # ahead of every other injection. Counter resets when a real tool
+        # call lands, so transient narration doesn't poison subsequent rounds.
         narration_only_rounds = 0
-
-
-
-
-
-
+        # Quota self-stop counter. ``search_literature`` returns a clear
+        # "quota exhausted" error when the budget is up, but the agent has
+        # historically retried 10+ times anyway. We watch the trajectory for
+        # consecutive quota-exhausted refusals and inject a hard-stop
+        # instruction once we see two in a row, freeing the rest of the
+        # step budget for productive work.
         quota_exhausted_consecutive = 0
         poison_resets = 0
-
-
-
-
-
-
-
-
+        # Each AI Studio call has a ~5–10% chance of returning tool_calls.0.args
+        # as a JSON string (instead of a dict), or producing other wire-format
+        # errors that need a thread reset to clear. With the previous cap of 2
+        # any 100-step run would die before finishing, even though every reset
+        # preserves a progress summary and the agent recovers cleanly between
+        # them. Bumped to 8 to absorb the realistic noise rate; the
+        # consecutive-reset guard below catches the degenerate "reset without
+        # making progress" case so we don't loop forever.
         max_poison_resets = 8
-
-
-
+        # Trajectory length captured at the previous poison reset, so we can
+        # detect "two resets in a row with no productive work between them" —
+        # the only condition under which more resets cannot help.
         last_reset_step_count = -1
         consecutive_unproductive_resets = 0
         max_consecutive_unproductive_resets = 2
-
-
-
-
-
-
-
-
-
-
-
-
-
+        # We don't cap submit blocks anymore — the previous "accept with caveats
+        # at N=3" produced papers based on broken experiments. Instead we
+        # escalate the coaching message so the agent learns to (a) treat
+        # experiment-class feedback as a code-fix task rather than a writing
+        # task, and (b) fall back to an honest negative-result framing when it
+        # genuinely cannot fix the underlying issue. The hard step budget
+        # remains the safety net for runs that can't converge.
+        # NOTE (Phase-1 refactor): submit_blocks_used / checklist_blocks_used /
+        # first_block_step_idx are no longer read by the submit path (the LLM
+        # gates were removed — see the ``if self.submit_tool.submitted`` branch
+        # below). Kept declared so any leftover diagnostic code can compile;
+        # queued for deletion in Phase-2 alongside the helpers
+        # ``_count_exec_attempts_after`` and ``_compose_submit_block_message``.
         submit_blocks_used = 0
-
-
-
-
+        # Step index immediately after the first reviewer-block. Used as the
+        # baseline for counting whether the agent has actually tried fixing
+        # the bug (execute_code attempts) before the off-ramp to Path B
+        # (honest negative-result framing) becomes mentionable.
         first_block_step_idx: int | None = None
-
-
-
-
+        # Mod D: counter for checklist-gated blocks (separate from
+        # reviewer-driven submit_blocks_used so we can distinguish
+        # "executive function caught early submit" from "reviewer rejected
+        # the work" in trajectory metadata + UI cards).
         checklist_blocks_used = 0
 
         def _is_poisoned_history_error(exc_obj) -> bool:
             text = str(exc_obj)
-
+            # Provider-specific wire errors (the original cases).
             if "invalid function arguments" in text:
                 return True
             if "invalid params" in text and "tool_call_id" in text:
                 return True
-
-
-
-
-
-
+            # LangChain/pydantic rejection when an OpenAI-compatible upstream
+            # serializes ``tool_calls.*.args`` as a JSON string instead of an
+            # object. The conversation is poisoned exactly the same way: the
+            # AIMessage can't be replayed, so the next round will keep failing
+            # until the thread is reset. Without this match we bleed steps on
+            # runtime_error placeholders forever.
             if (
                 "validation error" in text
                 and "tool_calls" in text
                 and ("valid dictionary" in text or "dict_type" in text)
             ):
                 return True
-
-
-
+            # Out-of-order tool/user messages produced by an earlier poisoned
+            # turn ("Message format error, index[N] should be [tool] but is
+            # [user]"). Same remedy: reset the thread.
             if "Message format error" in text and "should be [tool]" in text:
                 return True
             return False
@@ -1041,14 +1041,14 @@ class ResearchAgent:
                 budget_steps_after = budget_step_count(trajectory.steps)
                 step_budget.record_round_progress(budget_steps_after - budget_steps_before)
 
-
-
-
-
-
-
-
-
+                # Narration / quota counters update (P0 + P1).
+                # ``new_steps`` are the trajectory steps this round produced.
+                # We classify them: a "real tool step" is anything that
+                # actually invoked the sandbox / external API — plan and
+                # runtime_error don't count. If zero real tool steps landed,
+                # the LLM almost certainly emitted prose-only output (the
+                # narration-spiral failure mode) and we need to override
+                # whatever else we'd inject with a format-violation reminder.
                 new_steps = trajectory.steps[trajectory_len_before_round:]
                 _NON_TOOL_ACTIONS = {
                     "plan", "runtime_error", "human_feedback",
@@ -1070,8 +1070,8 @@ class ResearchAgent:
                         round_idx + 1, narration_only_rounds,
                     )
 
-
-
+                # search_literature quota refusals — observation contains the
+                # "quota exhausted" string when the tool denied the call.
                 quota_refusals_this_round = sum(
                     1 for s in new_steps
                     if (s.action_name or "") == "search_literature"
@@ -1081,21 +1081,21 @@ class ResearchAgent:
                 if quota_refusals_this_round > 0:
                     quota_exhausted_consecutive += quota_refusals_this_round
                 else:
-
-
-
+                    # Reset only when the round contained a productive search
+                    # call (success), not just any non-search round — we don't
+                    # want every plan-only round to clear the counter.
                     if any(
                         (s.action_name or "") == "search_literature" and s.success
                         for s in new_steps
                     ):
                         quota_exhausted_consecutive = 0
 
-
-
-
-
-
-
+                # Hard stop on persistent narration spirals. We've already
+                # injected a format-violation nudge for ``narration_only_rounds
+                # >= 1``; if four straight rounds still produce zero tool
+                # calls, the LLM is genuinely stuck and burning the rest of
+                # the step budget on useless prose generation. End the run
+                # here so the user can debug rather than wait for max_rounds.
                 if narration_only_rounds >= 4:
                     logger.error(
                         "Narration spiral persisted %d rounds (no tool calls); "
@@ -1126,8 +1126,8 @@ class ResearchAgent:
                     )
                     break
             except Exception as exc:
-
-
+                # Don't abort the whole run on a single parse/tool error —
+                # feed the error back and give the agent a chance to recover.
                 logger.warning("Stream round %d failed: %s", round_idx, exc)
                 trajectory.add_step(
                     thought="[SYSTEM]",
@@ -1139,12 +1139,12 @@ class ResearchAgent:
                 )
 
                 if _is_poisoned_history_error(exc):
-
-
-
-
-
-
+                    # Decide whether to spend another reset. Two ceilings:
+                    #   1. Hard cap: max_poison_resets (absorb realistic noise).
+                    #   2. Consecutive unproductive resets: if the last reset
+                    #      was followed by zero successful tool calls before
+                    #      this poison error, the agent is genuinely stuck and
+                    #      more resets won't help.
                     productive_since_last_reset = (
                         last_reset_step_count == -1
                         or any(
@@ -1209,25 +1209,25 @@ class ResearchAgent:
                 current_input = {"messages": healing_msgs + [nudge]}
                 continue
 
-
-
-
-
+            # ReviewerCallback now emits its cards live (both "thinking" and
+            # final verdict) as reviews happen, so there is no per-round drain
+            # to run here. We still consult pending_feedback + last_review_failed
+            # below to decide whether to force another round.
 
             if self.submit_tool.submitted:
-
-
-
-
-
-
-
-
-
-
-
-
-
+                # Phase-1 refactor (REFACTOR_PLAN.md §3 Plan A): submit_result
+                # is a single-shot terminal call. No LLM checklist re-eval,
+                # no reviewer veto, no escalation message — the same design
+                # as SWE-agent's `submit` and PaperQA2's `complete`. The LLM
+                # eval gate that used to live here was the death-loop source
+                # in trajectory 72d6ad6d (12 checklist_blocks, never escaped)
+                # and c03d85d8 (6 checklist_blocks → narration spiral abort).
+                #
+                # Reviewer feedback is still useful, but only as a quality
+                # signal recorded on the trajectory, not as a hard gate.
+                # If the reviewer flagged issues at the report or submit
+                # checkpoint, we tag the run as a degraded success so the
+                # caller / UI can surface the warning to the user.
                 if (
                     reviewer_cb
                     and reviewer_cb.last_review_failed
@@ -1244,22 +1244,22 @@ class ResearchAgent:
                         "recorded as metadata, no block.",
                         feedback_class,
                     )
-
-
+                    # Drain the reviewer state so a stale warning doesn't
+                    # leak into the next run if this agent instance is reused.
                     reviewer_cb.pending_feedback = None
                     reviewer_cb.last_review_failed = False
 
                 logger.info("Task submitted at step %d", len(trajectory.steps))
                 break
 
-
+            # Collect feedback to inject for the next round
             injections: list[str] = []
 
-
-
-
-
-
+            # -2. Format-violation guard (P0). When the LLM emitted prose code
+            # blocks instead of calling tools, we MUST get this reminder in
+            # front of the next prompt — it's load-bearing for breaking the
+            # narration spiral. Goes ahead of the checklist (which would
+            # otherwise be the first injection and bury the format problem).
             if narration_only_rounds >= 1:
                 format_msg = (
                     "⚠️ FORMAT VIOLATION DETECTED — your previous response "
@@ -1288,10 +1288,10 @@ class ResearchAgent:
                     narration_only_rounds,
                 )
 
-
-
-
-
+            # -1.5. Quota self-stop (P1). After two consecutive
+            # quota-exhausted denials, tell the agent the search budget is
+            # gone and it should stop trying. This frees the rest of the
+            # step budget for productive work (execute_code / report).
             if quota_exhausted_consecutive >= 2:
                 injections.append(
                     "⚠️ search_literature QUOTA EXHAUSTED for this run "
@@ -1308,15 +1308,15 @@ class ResearchAgent:
                     quota_exhausted_consecutive,
                 )
 
-
-
-
-
-
-
-
-
-
+            # -1. Topic anchor (replaces the old LLM-eval checklist gate).
+            # Re-inject a deterministic, filesystem-verified reminder of:
+            #   - the original topic (so the LLM doesn't drift after long
+            #     reviewer feedback chains),
+            #   - the parsed deliverables list (one-shot LLM parse at run
+            #     start; never re-evaluated per round),
+            #   - actual artifacts present on disk in the run workspace.
+            # We inject every TOPIC_REMINDER_INTERVAL rounds (and at round 1)
+            # so the reminder stays fresh without spamming.
             if (
                 round_idx == 0
                 or (round_idx + 1) % TOPIC_REMINDER_INTERVAL == 0
@@ -1332,10 +1332,10 @@ class ResearchAgent:
                 if topic_block:
                     injections.append(topic_block)
 
-
-
-
-
+            # 0. Adaptive budget guardrail. Hitting the soft budget is not an
+            # automatic failure: if the agent is still producing useful work,
+            # extend the soft budget and inject a clear completion-focused
+            # instruction. Only the hard cap / repeated stalls end the run.
             budget_extension = step_budget.maybe_extend(trajectory.steps)
             if budget_extension:
                 injections.append(budget_extension)
@@ -1359,14 +1359,14 @@ class ResearchAgent:
                 injections.append(wrapup_hint)
                 logger.info("Injecting adaptive wrap-up hint")
 
-
+            # Reviewer feedback
             if reviewer_cb and reviewer_cb.pending_feedback:
                 feedback = reviewer_cb.pending_feedback
                 reviewer_cb.pending_feedback = None
                 injections.append(feedback)
                 logger.info("Injecting reviewer feedback: %s", feedback[:200])
 
-
+            # 3. Phase hints
             if phase_tracker is not None:
                 phase_tracker.max_steps = step_budget.current_budget
             hint = phase_tracker.get_phase_hint() if phase_tracker is not None else None
@@ -1374,9 +1374,9 @@ class ResearchAgent:
                 injections.append(hint)
                 logger.info("Injecting phase hint: %s", hint[:200])
 
-
-
-
+            # 4. Continuation nudge — the model sometimes stops mid-task and
+            # returns narrative text instead of another tool call. Give it a
+            # bounded number of prompts to keep going before giving up.
             if not injections and nudged_rounds < max_nudges:
                 nudged_rounds += 1
                 injections.append(
@@ -1415,7 +1415,7 @@ class ResearchAgent:
             current_input = {"messages": [HumanMessage(content=combined)]}
             logger.info("Round %d: injecting feedback into conversation", round_idx + 2)
 
-
+        # Finalize
         if self.submit_tool.submitted:
             trajectory.finish("success")
         else:
@@ -1429,9 +1429,9 @@ class ResearchAgent:
 
         return trajectory
 
-
-
-
+    # ------------------------------------------------------------------
+    # Compatibility guardrail helpers
+    # ------------------------------------------------------------------
     def _get_phase_hint(self, step_idx: int | None = None) -> str | None:
         """Compatibility wrapper around the old phase-hint behavior."""
 

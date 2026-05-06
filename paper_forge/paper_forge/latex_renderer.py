@@ -32,39 +32,17 @@ _FIGURE_SUFFIX_PREFERENCE = {
     ".bmp": 3,
 }
 
-
-def _normalize_page_size(page_size: str | None) -> str:
-    value = (page_size or "A4").strip().lower()
-    return "letterpaper" if value in {"letter", "letterpaper"} else "a4paper"
-
-
-def _normalize_body_font_size(font_size_body: int | float | str | None) -> int:
-    try:
-        size = int(round(float(font_size_body)))
-    except (TypeError, ValueError):
-        size = 11
-    return max(9, min(14, size))
-
-
-def _latex_class_font_size(font_size_body: int) -> str:
-    """Map the UI's broader body-size slider to standard class options."""
-    if font_size_body <= 10:
-        return "10pt"
-    if font_size_body >= 12:
-        return "12pt"
-    return "11pt"
-
-
-
-
-
-
-
-
-
-
-
-
+# LaTeX special characters that need escaping in text content.
+#
+# IMPORTANT: this map is consumed by a *single-pass* regex substitution in
+# ``escape_latex``. The previous implementation looped ``str.replace`` over
+# the table sequentially; that was wrong because the replacement for ``\\``
+# is ``\textbackslash{}`` — which contains ``{`` and ``}`` that the later
+# rules then re-escaped. ``\theta`` would walk through:
+#   ``\theta`` → ``\textbackslash{}theta`` → ``\textbackslash\{}theta``
+#   → ``\textbackslash\{\}theta`` and render in the PDF as ``\{}theta``.
+# The single-pass regex below visits each source char exactly once, so the
+# replacement strings are never themselves re-scanned.
 _LATEX_CHAR_MAP = {
     "\\": r"\textbackslash{}",
     "&": r"\&",
@@ -105,20 +83,20 @@ def _contains_cjk(*values: Any) -> bool:
     return False
 
 
-
-
-
+# Markdown inline patterns. Evaluated left-to-right; the first matching
+# pattern on a line wins for that span. Ordering matters: `**bold**` must be
+# checked before `*italic*` so `**` is not misread as "open italic then close".
 _INLINE_SENTINEL = "\0INNER\0"
 _MD_INLINE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-
+    # Fenced inline code: `x` -> \texttt{x}
     (re.compile(r"`([^`\n]+?)`"), "\\texttt{" + _INLINE_SENTINEL + "}"),
-
+    # **bold**
     (re.compile(r"\*\*([^*\n]+?)\*\*"), "\\textbf{" + _INLINE_SENTINEL + "}"),
     (re.compile(r"__([^_\n]+?)__"), "\\textbf{" + _INLINE_SENTINEL + "}"),
-
+    # *italic* / _italic_  (single, non-greedy)
     (re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)"), "\\textit{" + _INLINE_SENTINEL + "}"),
     (re.compile(r"(?<!_)_([^_\n]+?)_(?!_)"), "\\textit{" + _INLINE_SENTINEL + "}"),
-
+    # [text](url) -> \href{url}{text}
     (re.compile(r"\[([^\]\n]+?)\]\(([^)\n]+?)\)"), "LINK"),
 ]
 
@@ -127,14 +105,14 @@ _MD_NUMERIC_PREFIX_RE = re.compile(r"^\s*\d+(?:\.\d+)*[.)]?\s+")
 _MD_UNORDERED_BULLET_RE = re.compile(r"^\s*[-*+]\s+")
 _MD_ORDERED_BULLET_RE = re.compile(r"^\s*\d+[.)]\s+")
 _MD_TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
-
+# Separator row: |---|:---:|---:| — dashes with optional colons, pipes around.
 _MD_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
 
-
-
-
-
-
+# Math placeholders. We pull math expressions out before running
+# ``escape_latex`` so the dollar signs and backslashes inside them aren't
+# mangled (escape would turn ``$x$`` into ``\$x\$`` and the formula would
+# render as literal ``$x$`` instead of typeset math). The placeholder uses
+# a NUL-byte sentinel that can't appear in real input.
 _MATH_PLACEHOLDER_PREFIX = "\0MATH\0"
 _MATH_ENV_RE = re.compile(
     r"\\begin\{(equation\*?|align\*?|gather\*?|multline\*?)\}[\s\S]+?\\end\{\1\}"
@@ -142,21 +120,21 @@ _MATH_ENV_RE = re.compile(
 _BRACKET_DISPLAY_MATH_RE = re.compile(r"\\\[([\s\S]+?)\\\]")
 _PAREN_INLINE_MATH_RE = re.compile(r"\\\(([\s\S]+?)\\\)")
 _DISPLAY_MATH_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
-
-
-
+# Inline math: a non-empty payload between single ``$`` that isn't itself
+# a display ``$$``. We require at least one non-whitespace char inside so
+# stray dollars in prose (e.g. "$10") don't accidentally swallow text.
 _INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^\n$]+?)\$(?!\$)")
 _LONG_MATH_MIN_CHARS = 72
 
-
-
-
-
-
-
-
-
-
+# Last-line-of-defense for the LLM "self-escaped backslash" pattern
+# ``\{}command`` (see paper_writer._undo_llm_self_escape for the full
+# rationale). We replicate the same regex here, in the renderer's own
+# entry point, so that ANY paragraph reaching the tex source — regardless
+# of whether it came from the agent's generate_report path, paper_forge's
+# LLM rewrite/expand path, or a user-edited bundle — has the pattern
+# stripped before escape_latex would mangle it into the literal
+# ``\textbackslash\{\}command`` string the user keeps seeing in the PDF.
+# Idempotent: running it on already-clean text changes nothing.
 _RENDERER_SELF_ESCAPED_BACKSLASH_RE = re.compile(
     r"\\\{\}(?=[A-Za-z\[\]\(\)\{\}\|,;:!\\])"
 )
@@ -169,13 +147,13 @@ def _undo_llm_self_escape_at_render(text: str) -> str:
     return _RENDERER_SELF_ESCAPED_BACKSLASH_RE.sub(r"\\", text)
 
 
-
-
-
-
-
-
-
+# R1.5: After self-escape removal, the LLM may have left literal LaTeX
+# list environments (``\begin{itemize} \item ... \end{itemize}``) inline
+# in prose. ``_protect_math`` doesn't recognize these as math, so without
+# intervention they fall through to ``escape_latex`` and re-emerge as
+# ``\textbackslash\{\}begin\{itemize\}`` in the final tex (the b7a6bd6f
+# itemize-block bug). We rewrite them into Markdown list items so the
+# renderer's regular list pipeline turns them back into proper LaTeX.
 _LATEX_ITEMIZE_RE = re.compile(
     r"\\begin\{itemize\}([\s\S]+?)\\end\{itemize\}"
 )
@@ -211,23 +189,23 @@ def _latex_lists_to_markdown(text: str) -> str:
     return text
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+# R2 (latex_renderer half): allowlist of LaTeX commands that may appear
+# inline in prose paragraphs and whose argument we want to pass through
+# verbatim instead of escaping. Text-formatting commands (textbf / textit
+# / texttt / emph) are deliberately NOT here — paper_writer rewrites
+# those into Markdown upstream, where the normal markdown→LaTeX pipeline
+# handles them. The commands listed here have no Markdown equivalent and
+# must reach the tex source untouched.
+#
+# Each entry can take one or two ``{...}`` groups with non-nested bodies.
+# Rare nested cases (``\href{url}{text \textbf{x}}``) will fall through
+# to escape; that's preferable to greedy matching that could swallow the
+# wrong text.
 _INLINE_LATEX_ALLOWLIST_NAMES: tuple[str, ...] = (
-    "href", "url",
-    "cite", "citep", "citet", "citealp", "citeauthor",
-    "ref", "eqref", "pageref", "label",
-    "footnote", "footnotemark", "footnotetext",
+    "href", "url",                                      # links
+    "cite", "citep", "citet", "citealp", "citeauthor",  # citations
+    "ref", "eqref", "pageref", "label",                 # cross-refs
+    "footnote", "footnotemark", "footnotetext",         # footnotes
 )
 _INLINE_LATEX_ALLOWLIST_RE = re.compile(
     r"\\(?:" + "|".join(_INLINE_LATEX_ALLOWLIST_NAMES) + r")"
@@ -235,15 +213,15 @@ _INLINE_LATEX_ALLOWLIST_RE = re.compile(
 )
 
 _CODE_FENCE_LINE_RE = re.compile(r"^\s*[`'\"]{0,2}```\s*([A-Za-z0-9_-]+)?\s*$")
-
-
-
-
-
-
-
-
-
+# Strict Python-code-line detector. The previous version matched any line
+# containing ` class`, ` from`, ` def`, ` for`, ` if`, etc. as a substring,
+# which deleted ordinary academic prose (trajectory 203c6c5c lost the
+# entire Conclusion section because "classification" contained " class"
+# and "calls from [21]" contained " from"). Now each Python keyword is
+# anchored at the beginning of the line AND followed by the syntax token
+# the language requires, so "We classify…" / "calls from [21]" no longer
+# match. The library-method markers (np., pd., plt.) are kept; they're
+# unambiguous code signals and almost never appear in prose.
 _CODE_LIKE_LINE_RE = re.compile(
     r"^\s*(?:"
     r"import\s+\w"
@@ -402,7 +380,7 @@ def _markdown_inline_to_latex(text: str) -> str:
 
     text, math_fragments = _protect_math(text)
 
-    tokens: list[tuple[str, str]] = []
+    tokens: list[tuple[str, str]] = []  # ("text", raw) | ("latex", rendered)
 
     def _append_text(chunk: str) -> None:
         if chunk:
@@ -465,15 +443,15 @@ def _paragraph_to_latex(text: str) -> str:
     """
     if not text:
         return ""
-
-
-
-
-
-
+    # Last-line-of-defense R1 guard. If the upstream cleaner is bypassed
+    # for any reason — stale module cache, a third-party path that calls
+    # ``_paragraph_to_latex`` directly without going through paper_writer,
+    # a manually-edited bundle.json — strip the LLM self-escape pattern
+    # here so the renderer never produces ``\textbackslash\{\}command``
+    # in the final tex.
     text = _undo_llm_self_escape_at_render(text)
-
-
+    # R1.5: rewrite literal \begin{itemize}/\begin{enumerate} blocks into
+    # Markdown list lines so the markdown→LaTeX pipeline takes them.
     text = _latex_lists_to_markdown(text)
     stripped = _strip_markdown_code_artifacts(str(text)).strip()
     if not stripped:
@@ -486,12 +464,12 @@ def _paragraph_to_latex(text: str) -> str:
 
     def _flush_plain() -> None:
         if plain_buf:
-
-
-
-
-
-
+            # Soft-wrapped source lines inside a single paragraph: join with
+            # a space so LaTeX can re-flow the text. The earlier `\\`
+            # behaviour turned every 80-column wrap into a hard line break,
+            # which produced the "one word per line" ragged output the user
+            # flagged. True paragraph breaks come from the *paragraph list*
+            # the parser emits, not from newlines inside a paragraph.
             out.append(" ".join(plain_buf))
             plain_buf.clear()
 
@@ -531,7 +509,7 @@ def _paragraph_to_latex(text: str) -> str:
             i += 1
             continue
 
-
+        # Display math: ``$$ x $$`` on a single line.
         single_math = re.match(r"^\$\$\s*(.+?)\s*\$\$$", stripped_line)
         if single_math:
             _flush_list(list_buf, out)
@@ -540,7 +518,7 @@ def _paragraph_to_latex(text: str) -> str:
             i += 1
             continue
 
-
+        # Horizontal rule mapping
         if stripped_line == "---":
             _flush_list(list_buf, out)
             _flush_plain()
@@ -548,7 +526,7 @@ def _paragraph_to_latex(text: str) -> str:
             i += 1
             continue
 
-
+        # Display math: ``$$`` opener line, body lines, ``$$`` closer.
         if stripped_line == "$$":
             _flush_list(list_buf, out)
             _flush_plain()
@@ -570,9 +548,9 @@ def _paragraph_to_latex(text: str) -> str:
                 out.append("\\[" + body + "\\]")
                 i = j
                 continue
+            # Fall through: dangling ``$$`` line, treat as plain text.
 
-
-
+        # Markdown table detection: a pipe row followed by a separator row.
         if (
             _MD_TABLE_ROW_RE.match(line)
             and i + 1 < len(lines)
@@ -835,7 +813,7 @@ def _materialize_remote_figure(
         except OSError:
             pass
     try:
-        import requests
+        import requests  # local import keeps requests optional at module load
     except ImportError:
         logger.warning(
             "Cannot download remote figure %s — `requests` is not installed.",
@@ -937,11 +915,8 @@ def render_paper_to_tex(
     output_dir: str | Path | None = None,
     template_dir: str | Path | None = None,
     template_name: str = DEFAULT_TEMPLATE,
-    page_size: str = "A4",
-    font_size_body: int = 11,
     line_spacing: float = 1.25,
     margin_mm: int = 25,
-    include_page_numbers: bool = True,
     forced_language: str | None = None,
     download_remote_images: bool = True,
 ) -> Path:
@@ -979,12 +954,12 @@ def render_paper_to_tex(
     references = paper.get("references") or []
     sections_raw = paper.get("sections") or []
 
-
-
-
-
-
-
+    # has_cjk decides whether the ctex CJK font package is loaded. It MUST
+    # track the real content — if the paper has any Chinese characters and
+    # we skip ctex, xelatex silently drops every CJK codepoint and the
+    # output turns into the shattered English-only fragment the user sees.
+    # forced_language is therefore a LABEL override only; it never suppresses
+    # CJK font loading.
     has_cjk = _contains_cjk(
         title,
         abstract,
@@ -1010,9 +985,6 @@ def render_paper_to_tex(
     }
 
     sections = [_prepare_section(s, images, output_dir) for s in sections_raw]
-    body_font_size = _normalize_body_font_size(font_size_body)
-    page_size_option = _normalize_page_size(page_size)
-    body_baseline_skip = body_font_size * 1.2
 
     rendered = template.render(
         title=_markdown_inline_to_latex(_clean_heading(title)),
@@ -1023,13 +995,8 @@ def render_paper_to_tex(
         references=[_markdown_inline_to_latex(r) for r in references],
         has_cjk=has_cjk,
         labels=labels,
-        page_size=page_size_option,
-        class_font_size=_latex_class_font_size(body_font_size),
-        body_font_size=body_font_size,
-        body_baseline_skip=f"{body_baseline_skip:.1f}",
         line_spacing=f"{line_spacing:.2f}",
         margin_mm=int(margin_mm),
-        include_page_numbers=bool(include_page_numbers),
     )
 
     tex_path = output_dir / "paper.tex"

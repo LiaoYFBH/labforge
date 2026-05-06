@@ -27,7 +27,7 @@ from .config import SandboxConfig
 
 logger = logging.getLogger(__name__)
 
-
+# Common package name mappings (import name -> pip name)
 _IMPORT_TO_PIP = {
     "sklearn": "scikit-learn",
     "cv2": "opencv-python",
@@ -49,8 +49,8 @@ class ExecutionResult:
     stderr: str
     exit_code: int
     timed_out: bool = False
-
-
+    # Persisted paths written by the sandbox so both the agent and the UI can
+    # point the user at the exact script + log produced by this call.
     script_path: str | None = None
     log_path: str | None = None
 
@@ -84,12 +84,12 @@ class Sandbox:
         self.config = config
         self.working_dir = Path(config.working_dir)
         self.working_dir.mkdir(parents=True, exist_ok=True)
-
+        # Detect Python executable with scientific packages
         self.python_cmd = config.python_executable or self._detect_python()
-
-
-
-
+        # Per-execution log directory. Every run of execute_code / execute_bash
+        # drops a timestamped .log + the actual script that was executed so the
+        # workspace gives a complete audit trail: "this CSV was produced by
+        # step N at time T by running exactly this code, whose stdout was X."
         self.logs_dir = self.working_dir / "logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._exec_counter = itertools.count(1)
@@ -161,7 +161,7 @@ class Sandbox:
         else:
             raise ValueError(f"Unknown sandbox backend: {self.config.backend}")
 
-
+        # Auto-install missing packages and retry
         if auto_install and not result.success and language == "python":
             missing_pkg = self._detect_missing_import(result.stderr)
             if missing_pkg:
@@ -175,7 +175,7 @@ class Sandbox:
                         result = self._execute_subprocess(code, language)
                     else:
                         result = self._execute_docker(code, language)
-
+                    # Annotate that we auto-installed
                     if result.success:
                         result.stdout = (
                             f"[Auto-installed: {missing_pkg}]\n" + result.stdout
@@ -188,9 +188,9 @@ class Sandbox:
         if not stderr:
             return None
 
-
-
-
+        # Match patterns like:
+        #   ModuleNotFoundError: No module named 'seaborn'
+        #   ImportError: No module named 'xgboost'
         patterns = [
             r"No module named ['\"](\w+)['\"]",
             r"No module named (\w+)",
@@ -200,7 +200,7 @@ class Sandbox:
             match = re.search(pattern, stderr)
             if match:
                 import_name = match.group(1)
-
+                # Map to pip name
                 pip_name = _IMPORT_TO_PIP.get(import_name, import_name)
                 return pip_name
         return None
@@ -208,8 +208,8 @@ class Sandbox:
     def execute_bash(self, command: str) -> ExecutionResult:
         """Execute a bash command."""
         script_path, log_path = self._next_log_paths(kind="bash", suffix=".sh")
-
-
+        # Persist the bash command as a runnable script so reviewers can
+        # rerun it verbatim later (also makes the workspace self-contained).
         script_path.write_text(command, encoding="utf-8")
         cmd = ["bash", "-c", command]
         result = self._run_command(cmd, cwd=str(self.working_dir))
@@ -226,13 +226,13 @@ class Sandbox:
         )
         return result
 
-
-
-
-
-
-
-
+    # ------------------------------------------------------------------ #
+    # Log trail — every execute_code / execute_bash writes the exact code
+    # that ran plus its stdout/stderr/exit-code into logs/. The CSVs any
+    # experiment writes live next to these logs so the entire workspace is
+    # an audit trail: you can always trace "this file was produced by
+    # running that script at that time."
+    # ------------------------------------------------------------------ #
     def _next_log_paths(self, kind: str, suffix: str) -> tuple[Path, Path]:
         idx = next(self._exec_counter)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -279,9 +279,9 @@ class Sandbox:
         suffix = ".py" if language == "python" else ".sh"
         cmd_prefix = [self.python_cmd] if language == "python" else ["bash"]
 
-
-
-
+        # Keep the exact script + the run log inside the workspace so later
+        # you can verify which code produced which output. Unlike a plain
+        # NamedTemporaryFile we do NOT delete this — the log dir IS the proof.
         script_path, log_path = self._next_log_paths(kind="code", suffix=suffix)
         script_path.write_text(code, encoding="utf-8")
 
@@ -318,7 +318,7 @@ class Sandbox:
             return self._run_command(
                 [
                     "docker", "run", "--rm",
-                    "--network=none",
+                    "--network=none",  # no network access for safety
                     "-v", f"{self.working_dir}:/workspace",
                     "-v", f"{temp_path}:/workspace/code{suffix}",
                     "-w", "/workspace",
@@ -333,11 +333,11 @@ class Sandbox:
     def _run_command(self, cmd: list[str], cwd: str) -> ExecutionResult:
         """Run a command with timeout and output capture."""
         try:
-
-
-
-
-
+            # Capture as bytes and decode with errors="replace" so a child
+            # process emitting non-UTF-8 stdout (e.g. legacy locale, binary
+            # leakage) doesn't blow up the agent's message history. With
+            # ``text=True`` the default decode is strict and any bad byte
+            # raises UnicodeDecodeError, which we'd then have to swallow.
             proc = subprocess.run(
                 cmd,
                 cwd=cwd,
@@ -377,10 +377,10 @@ class Sandbox:
         full_path = self.working_dir / path
         if not full_path.exists():
             return f"Error: File not found: {full_path}"
-
-
-
-
+        # ``errors="replace"`` so a sandbox file with stray non-UTF-8 bytes
+        # (binary leakage, locale-specific encoding) returns readable text
+        # with ``?`` in place of bad bytes, instead of raising
+        # UnicodeDecodeError up through the tool layer into the agent loop.
         return full_path.read_text(encoding="utf-8", errors="replace")[
             : self.config.max_output_length
         ]

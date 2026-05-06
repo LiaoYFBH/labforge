@@ -5,9 +5,9 @@ Inspired by best practices from AI-Scientist v2 (tree search, systematic experim
 AutoResearchClaw (self-healing, staged pipeline), and Agent Laboratory (role-based).
 """
 
-
-
-
+# ──────────────────────────────────────────────────────────────────
+# System prompt: defines agent identity, capabilities, and rules
+# ──────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
 You are LabForge, an autonomous scientific research agent specializing in \
@@ -244,9 +244,9 @@ After generate_report:
    tool call.
 """
 
-
-
-
+# ──────────────────────────────────────────────────────────────────
+# Task prompt template
+# ──────────────────────────────────────────────────────────────────
 
 TASK_PROMPT_TEMPLATE = """\
 ## Research Task
@@ -263,9 +263,9 @@ Follow the 5-phase workflow (Literature → Planning → Implementation → Anal
 Begin with Phase 1: search for relevant literature on this topic.
 """
 
-
-
-
+# ──────────────────────────────────────────────────────────────────
+# Step format hint (appended to system prompt)
+# ──────────────────────────────────────────────────────────────────
 
 STEP_FORMAT_HINT = """\
 For each step:
@@ -276,9 +276,9 @@ For each step:
 Keep your reasoning concise (2-4 sentences). Focus on actionable decisions.
 """
 
-
-
-
+# ──────────────────────────────────────────────────────────────────
+# Phase transition hints (injected when agent seems stuck)
+# ──────────────────────────────────────────────────────────────────
 
 PHASE_HINTS = {
     "literature_to_planning": (
@@ -316,9 +316,9 @@ PHASE_HINTS = {
     ),
 }
 
-
-
-
+# ──────────────────────────────────────────────────────────────────
+# Error recovery prompt (injected when code execution fails)
+# ──────────────────────────────────────────────────────────────────
 
 ERROR_RECOVERY_PROMPT = """\
 The previous code execution failed with the error shown above.
@@ -332,9 +332,9 @@ Diagnose the issue:
 Fix the issue and try again.
 """
 
-
-
-
+# ──────────────────────────────────────────────────────────────────
+# Report template
+# ──────────────────────────────────────────────────────────────────
 
 REPORT_TEMPLATE = """\
 # Research Report: {title}

@@ -12,12 +12,12 @@ from .config import resolve_api_key_for_endpoint
 DEFAULT_AGENT_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_AGENT_MODEL = "MiniMax-M2.7"
 DEFAULT_REVIEWER_BASE_URL = "https://aistudio.baidu.com/llm/lmapi/v3"
-
-
-
-
+# 2026 年 AI Studio 已把老的 ernie-3.5-8k / speed / lite / tiny 系列从
+# 默认开放清单撤下，新账户走这些模型会拿到 invalid_model。改用 deepseek-v3
+# 作为默认评审模型 —— 和 agent 主模型走同一个套餐，付费等级一致就不会
+# 出现 "agent 能跑 reviewer 401" 的不对称失败。
 DEFAULT_REVIEWER_MODEL = "deepseek-v3"
-
+# Backward compat alias
 DEFAULT_BASE_URL = DEFAULT_AGENT_BASE_URL
 DEFAULT_OCR_URL = "https://j5j557k6rbo1c6f4.aistudio-app.com/layout-parsing"
 DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parent.parent / ".ui_settings.json"
@@ -43,10 +43,10 @@ class UISettings:
     reviewer_base_url: str = DEFAULT_REVIEWER_BASE_URL
     reviewer_api_key: str = ""
 
-
-
-
-
+    # ``0`` means no user-facing hard step cap. The previous 30-step default
+    # was cutting agents off before experiments / PaperForge export finished.
+    # Internally LangGraph still receives a large finite recursion limit to
+    # prevent a genuinely infinite loop, but the UI no longer stops at 30.
     max_steps: int = 0
     temperature: float = 0.0
 
@@ -54,15 +54,16 @@ class UISettings:
     ocr_api_url: str = DEFAULT_OCR_URL
     ocr_token: str = ""
 
-
-
-
+    # Literature search uses arXiv. ``search_quota`` caps total
+    # search_literature calls per run so reactive re-searching can't loop
+    # forever — set to 0 to disable the cap. 8 covers a planned 4-6 query
+    # batch with headroom.
     search_quota: int = 8
 
-
-
-
-
+    # Workflow mode chosen by the user via the UI radio. Always one of
+    # ``"survey"`` (literature-only) or ``"experiment"`` (runs code).
+    # There is intentionally no "auto" — keyword-based auto-classification
+    # used to mis-route prompts like "做实验分析参数的作用" to survey.
     run_mode: str = "survey"
 
     @classmethod

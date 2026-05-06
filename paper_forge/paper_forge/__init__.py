@@ -31,11 +31,8 @@ def render_paper_pdf(
     template_dir=None,
     template_name="article.tex.j2",
     template_key: str | None = None,
-    page_size: str = "A4",
-    font_size_body: int = 11,
     line_spacing: float = 1.25,
     margin_mm: int = 25,
-    include_page_numbers: bool = True,
     keep_tex: bool = True,
     engine: str | None = None,
     forced_language: str | None = None,
@@ -49,8 +46,8 @@ def render_paper_pdf(
     cleaned up afterwards.
 
     If ``template_key`` is provided, it overrides ``template_name`` and
-    copies any explicitly configured conference assets next to the rendered
-    .tex so xelatex can find them at compile time.
+    additionally pulls down any conference-specific .sty/.cls assets next
+    to the rendered .tex so xelatex can find them at compile time.
 
     Returns the final PDF path.
     """
@@ -69,7 +66,7 @@ def render_paper_pdf(
     if template_key is not None:
         template = get_template(template_key)
         template_name = template.template_filename
-
+        # Pull in conference-specific style files (best-effort).
         ensure_assets(template, work_dir)
 
     tex_path = render_paper_to_tex(
@@ -78,11 +75,8 @@ def render_paper_pdf(
         output_dir=work_dir,
         template_dir=template_dir,
         template_name=template_name,
-        page_size=page_size,
-        font_size_body=font_size_body,
         line_spacing=line_spacing,
         margin_mm=margin_mm,
-        include_page_numbers=include_page_numbers,
         forced_language=forced_language,
     )
 
@@ -96,38 +90,38 @@ def render_paper_pdf(
     )
     write_quality_report(quality_report, work_dir / "pdf_quality_report.json")
 
-
-
-
-
+    # Discard the downloaded remote-image cache: the bytes are now baked
+    # into the .tex's figures/ directory (or the PDF), so there's no reason
+    # to keep the signed-URL temporaries. With keep_tex=True the user
+    # still gets paper.tex + figures/, just not the raw download dump.
     remote_cache = work_dir / ".remote_images"
     if remote_cache.exists():
         shutil.rmtree(remote_cache, ignore_errors=True)
 
-
-
-
-
+    # Surface the .tex source + figures/ next to the PDF so users can
+    # tweak rendering issues by hand without spelunking into the hidden
+    # ``.{stem}_latex/`` work dir. Filename mirrors the PDF stem so it's
+    # obvious which .tex produced which PDF.
     if keep_tex:
         try:
             visible_tex = output_path.with_suffix(".tex")
             shutil.copyfile(str(tex_path), str(visible_tex))
-
-
+            # Also copy figures/ so the visible .tex compiles standalone
+            # if the user takes it out and runs xelatex by hand.
             src_figs = work_dir / "figures"
             if src_figs.is_dir():
                 dst_figs = output_path.parent / "figures"
                 if dst_figs.exists():
-
+                    # Refresh: replace stale copy
                     shutil.rmtree(dst_figs, ignore_errors=True)
                 shutil.copytree(str(src_figs), str(dst_figs))
-
-
+            # Also drop the .log next to it so users can read xelatex
+            # warnings without finding the hidden dir.
             if log_path.exists():
                 shutil.copyfile(str(log_path), str(output_path.with_suffix(".log")))
         except OSError:
-
-
+            # Filesystem hiccup is non-fatal: the PDF + hidden work_dir
+            # still exist, the visible copy is just a convenience.
             pass
 
     if not keep_tex:

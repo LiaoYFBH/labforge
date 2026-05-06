@@ -31,9 +31,9 @@ from .config import ModelConfig, resolve_api_key_for_endpoint
 logger = logging.getLogger(__name__)
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Tolerant JSON parsing for tool_call arguments
+# ---------------------------------------------------------------------------
 
 def _tolerant_json_loads(text: str) -> dict | None:
     """Best-effort JSON object parse for malformed LLM outputs.
@@ -68,7 +68,7 @@ def _tolerant_json_loads(text: str) -> dict | None:
         else:
             return result if isinstance(result, dict) else None
 
-
+    # Try extracting the first balanced { ... } block.
     start = text.find("{")
     if start != -1:
         depth = 0
@@ -114,7 +114,7 @@ def _coerce_function_arguments(raw: Any) -> str:
         except (TypeError, ValueError):
             return "{}"
     if isinstance(raw, str):
-
+        # Already string. Validate it is parseable; if not, attempt repair.
         if not raw.strip():
             return "{}"
         try:
@@ -138,7 +138,7 @@ def _coerce_function_arguments(raw: Any) -> str:
                 raw[:200],
             )
             return "{}"
-
+    # Fallback for any other type.
     return "{}"
 
 
@@ -186,8 +186,8 @@ def _normalize_aimessage_tool_calls(message: Any) -> None:
     if not tool_calls:
         return
     for tc in tool_calls:
-
-
+        # tool_calls entries are dicts in LangChain core; some versions wrap
+        # them as TypedDicts which still behave like dicts for indexing.
         if not isinstance(tc, dict):
             continue
         args = tc.get("args")
@@ -204,35 +204,35 @@ def _normalize_aimessage_tool_calls(message: Any) -> None:
                 tc["args"] = repaired
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# ---------------------------------------------------------------------------
+# Module-import-time monkey patch for the ``tool_call`` factory
+# ---------------------------------------------------------------------------
+#
+# Several OpenAI-compatible providers (notably AI Studio's deepseek-v3 and
+# ERNIE 4.5+) intermittently return tool_call ``arguments`` that, after
+# json.loads, are a *string* rather than a dict — usually a double-encoded
+# JSON payload. ``langchain_core.messages.tool.tool_call(args=<str>)`` then
+# fails ToolCall pydantic validation with
+# ``tool_calls.0.args Input should be a valid dictionary``, which propagates
+# through ``langgraph.prebuilt.create_react_agent`` and poisons the
+# conversation thread. The poison-reset path in ``agent.py`` exists as a
+# last-ditch recovery, but in practice this error fires every 8-15 LLM
+# calls and exhausts the reset cap before the run completes.
+#
+# The clean fix is to coerce ``args`` to a dict *inside the factory itself*,
+# so non-dict shapes never reach the ToolCall validator. Three modules each
+# hold their own bound reference to the factory:
+#
+#   * langchain_core.messages.tool.tool_call            (canonical)
+#   * langchain_core.messages.ai.create_tool_call       (alias used by
+#     AIMessage._backwards_compat_tool_calls and AIMessageChunk)
+#   * langchain_core.output_parsers.openai_tools.create_tool_call
+#     (used by parse_tool_call, which langchain_openai re-exports)
+#
+# We replace all three so every code path lands on the safe version.
+# ``default_tool_parser`` in ``langchain_core.messages.tool`` calls
+# ``tool_call(...)`` via module-local lookup, so patching that module
+# automatically covers it too.
 
 def _coerce_tool_args_to_dict(args: Any) -> dict:
     """Return a dict suitable for ``ToolCall.args``.
@@ -250,8 +250,8 @@ def _coerce_tool_args_to_dict(args: Any) -> dict:
             parsed = json.loads(args)
         except (json.JSONDecodeError, TypeError):
             parsed = _tolerant_json_loads(args)
-
-
+        # Handle double-encoded JSON: parsed is itself a string that
+        # contains the real JSON object.
         if isinstance(parsed, str):
             try:
                 inner = json.loads(parsed)
@@ -271,9 +271,9 @@ def _install_tool_call_patch() -> None:
     Idempotent: calling twice is a no-op (we tag the patched function).
     """
     try:
-        from langchain_core.messages import tool as _lc_tool_module
-        from langchain_core.messages import ai as _lc_ai_module
-        from langchain_core.output_parsers import openai_tools as _lc_openai_tools_module
+        from langchain_core.messages import tool as _lc_tool_module  # type: ignore
+        from langchain_core.messages import ai as _lc_ai_module      # type: ignore
+        from langchain_core.output_parsers import openai_tools as _lc_openai_tools_module  # type: ignore
     except ImportError:
         logger.warning(
             "Could not import langchain_core tool_call modules; "
@@ -292,11 +292,11 @@ def _install_tool_call_patch() -> None:
                 "Coerced non-dict tool_call args to dict (name=%r). Sample: %r",
                 name, repr(args)[:200],
             )
-
-
-
-
-
+        # LLMs (notably ERNIE 4.5) sometimes emit tool names with stray
+        # leading/trailing whitespace — e.g. "execute_code  " — which the
+        # LangGraph ToolNode treats as an unknown tool and answers with
+        # "Error: ... is not a valid tool". Strip here so the dispatch
+        # always lands on the registered name.
         if isinstance(name, str):
             stripped = name.strip()
             if stripped != name:
@@ -307,7 +307,7 @@ def _install_tool_call_patch() -> None:
                 name = stripped
         return original(name=name, args=coerced, id=id, **kwargs)
 
-    safe_tool_call.__lab_forge_patched__ = True
+    safe_tool_call.__lab_forge_patched__ = True  # type: ignore[attr-defined]
 
     _lc_tool_module.tool_call = safe_tool_call
     _lc_ai_module.create_tool_call = safe_tool_call
@@ -332,10 +332,10 @@ class ResilientChatOpenAI(ChatOpenAI):
     streaming mode.
     """
 
-    def _create_chat_result(self, response, generation_info=None):
-
-
-
+    def _create_chat_result(self, response, generation_info=None):  # type: ignore[override]
+        # Convert pydantic response objects to dict so we can mutate before
+        # the parent re-parses. Parent accepts both dict and openai.BaseModel,
+        # so passing the dict is safe.
         if hasattr(response, "model_dump") and not isinstance(response, dict):
             response_dict = response.model_dump()
         else:
@@ -344,20 +344,20 @@ class ResilientChatOpenAI(ChatOpenAI):
         if isinstance(response_dict, dict):
             try:
                 _normalize_response_dict(response_dict)
-            except Exception:
+            except Exception:  # pragma: no cover - defensive
                 logger.exception("Pre-pass tool_call arg normalization failed")
             result = super()._create_chat_result(response_dict, generation_info)
         else:
             result = super()._create_chat_result(response, generation_info)
 
-
-
+        # Belt-and-suspenders: even if the pre-pass somehow missed a case,
+        # walk the produced AIMessage and coerce any leftover string args.
         try:
             for gen in getattr(result, "generations", []) or []:
                 msg = getattr(gen, "message", None)
                 if msg is not None:
                     _normalize_aimessage_tool_calls(msg)
-        except Exception:
+        except Exception:  # pragma: no cover - defensive
             logger.exception("Post-pass tool_call arg normalization failed")
 
         return result
@@ -372,9 +372,9 @@ def _get_first_env(*keys: str) -> str:
     return ""
 
 
-
-
-
+# Pre-defined model profiles for quick selection in the UI / CLI.
+# 主模型需要支持 Function Calling；评审模型不需要。
+# 既支持 MiniMax，也支持星河社区（AI Studio）系列。
 MODEL_PRESETS: dict[str, dict[str, str]] = {
     "MiniMax-M2.7": {
         "model": "MiniMax-M2.7",
@@ -414,14 +414,14 @@ MODEL_PRESETS: dict[str, dict[str, str]] = {
     },
 }
 
-
-
-
-
-
-
-
-
+# Models available for reviewer (no function calling needed, any model works).
+# Order matters — the first entry is shown as the default in the UI dropdown.
+#
+# AI Studio 在 2026 年把老的 ernie-3.5-8k / ernie-speed / ernie-lite / ernie-tiny
+# 等系列从默认开放清单撤掉了；新付费账户拿到的是 DeepSeek / ERNIE 4.5+ /
+# Qwen3 / Kimi 这批现役模型。所以我们把现役模型摆在前面，DeepSeek-V3 作为
+# 默认评审模型 —— 它和 agent 主模型走同一个 AI Studio 套餐，不会再出现
+# "agent 能跑 reviewer 401" 的不对称失败。
 REVIEWER_PRESETS: dict[str, dict[str, str]] = {
     "星河社区 · DeepSeek-V3 (推荐)": {
         "model": "deepseek-v3",

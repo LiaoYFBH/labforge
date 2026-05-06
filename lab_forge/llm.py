@@ -153,7 +153,7 @@ class LLMClient:
             },
         }
 
-
+        # Parse tool calls if present
         if getattr(message, "tool_calls", None):
             result["tool_calls"] = []
             for tc in message.tool_calls:
@@ -190,11 +190,11 @@ class LLMClient:
         except (TypeError, json.JSONDecodeError):
             pass
 
-
-
+        # Try to repair common JSON issues from LLMs:
+        # 1. Trailing commas  2. Unescaped newlines in strings  3. Single quotes
         if isinstance(raw_arguments, str):
             repaired = raw_arguments
-
+            # Remove trailing commas before } or ]
             repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
             try:
                 return json.loads(repaired)

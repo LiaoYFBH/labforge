@@ -2,11 +2,11 @@
 PaperForge — 文档转学术论文 PDF 工作台。
 
 特性：
-- Monochrome Research Studio UI（与 lab-forge ui.py 同款主题）
+- Monochrome Research Studio UI（与 lab-forge ui-new.py 同款主题）
 - 支持 PaddleOCR 解析 PDF / 图片为 Markdown
 - 支持星河社区（AI Studio）等任意 OpenAI 兼容大模型，UI 内可配置 / 切换
 - 多种顶会 LaTeX 模板（IEEE / NeurIPS / ICML / ACL / ACM SIGCONF / 通用 article）
-  可选，使用随仓库发布的自包含模板与 TexLive 常见宏包
+  可选，编译时自动从网络拉取对应会议样式文件
 - LLM-write 与纯组装两种生成模式，可由调用方注入大模型
 - 既能独立运行（单仓库开源），也能作为 lab-forge 等上游 agent 的论文生成模块
 """
@@ -21,12 +21,10 @@ import traceback
 from pathlib import Path
 
 import gradio as gr
-from langchain_openai import ChatOpenAI
 
 from paper_forge.config import LLMConfig, OCRConfig, PDFStyleConfig
 from paper_forge.env_utils import load_project_env
 from paper_forge.llm_client import extract_json_from_response
-from paper_forge.markdown_normalizer import normalize_markdown
 from paper_forge.ocr_client import parse_multiple_documents
 from paper_forge.paper_writer import (
     should_use_native_markdown_parser,
@@ -51,9 +49,9 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# 模型预设：星河社区 (AI Studio) + MiniMax + 其它兼容接口
+# ────────────────────────────────────────────────────────────────
 
 MODEL_PRESETS: dict[str, dict[str, str]] = {
     "星河社区 · ERNIE 4.5 Turbo 128K (推荐)": {
@@ -95,9 +93,9 @@ MODEL_PRESETS: dict[str, dict[str, str]] = {
 }
 
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# Session 状态
+# ────────────────────────────────────────────────────────────────
 
 class SessionState:
     """Per-session state for tracking OCR results and images."""
@@ -121,14 +119,14 @@ class SessionState:
 session = SessionState()
 
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# Modern tech CSS
+# ────────────────────────────────────────────────────────────────
 
 CUSTOM_CSS = """
 /* PaperForge — monochrome Research Studio palette.
  *
- * The visual language matches the lab-forge ui.py file
+ * The visual language matches the lab-forge ui-new.py file
  * so the two apps feel like siblings: white canvas, hairline borders,
  * serif headings, mono captions, single accent (Klein-blue) reserved for
  * primary actions and status badges. No glow, no neon, no gradient body.
@@ -173,7 +171,7 @@ body, .gradio-container {
 .gradio-container * { box-sizing: border-box; }
 footer { display: none !important; }
 
-/* Top bar — mirrors ui.py .sp-topbar ----------------------------------- */
+/* Top bar — mirrors ui-new.py .sp-topbar ----------------------------------- */
 .page-header {
   display: flex;
   align-items: center;
@@ -445,9 +443,9 @@ button.primary:hover, .gr-button-primary:hover {
 """
 
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────────────────────
 
 TEXT_EXTENSIONS = {".md", ".txt", ".markdown", ".text"}
 JSON_BUNDLE_EXTENSIONS = {".json"}
@@ -519,8 +517,8 @@ def template_info_md(template_key: str) -> str:
     if template.download_urls:
         files = "、".join(name for name, _ in template.download_urls)
         extras = (
-            f"\n**模板附带的可选样式资产**：`{files}`"
-            "\n当前内置模板默认不依赖运行时下载；如发行版配置了资产 URL，编译时会尽力解析。"
+            f"\n**首次编译会自动从网络拉取的样式文件**：`{files}`"
+            "\n下载失败时会回退到 TexLive 自带版本（若有）。"
         )
     return (
         f"**当前模板** {template.label}  \n"
@@ -529,9 +527,9 @@ def template_info_md(template_key: str) -> str:
     )
 
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# OCR handler
+# ────────────────────────────────────────────────────────────────
 
 def handle_parse_documents(
     files,
@@ -669,9 +667,9 @@ def _build_gallery(images: dict[str, bytes]):
     return items if items else None
 
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# Paper generation
+# ────────────────────────────────────────────────────────────────
 
 def handle_generate_paper(
     markdown_text: str,
@@ -699,11 +697,11 @@ def handle_generate_paper(
         yield "请先在「📄 上传与解析」里解析文档，或直接粘贴 Markdown 内容。", "", None
         return
 
-
-
-
-
-
+    # rewrite_mode is one of:
+    #   "Reformat Only"        → no LLM rewrite, just structure & format
+    #   "Rewrite & Enhance"    → polish each section (preserves length)
+    #   "Expand to Top-Conf"   → top-conference style expansion driven by
+    #                            paper_forge.style_guide (multiplies length)
     expand_mode = rewrite_mode == "Expand to Top-Conf"
     user_target_words = int(target_total_words) if target_total_words and int(target_total_words) > 0 else None
     forced_language = paper_language if paper_language in ("zh", "en") else None
@@ -717,7 +715,7 @@ def handle_generate_paper(
         yield "请在「⚙️ 模型与 OCR 配置」中填写大模型 API Key。", "", None
         return
 
-
+    # User Step 7/9: Normalize the markdown strict formatting before doing anything else
     yield "Step 0/2: 正在规范化 Markdown 语法子集...", "", None
     try:
         if api_key:
@@ -824,11 +822,8 @@ def handle_generate_paper(
             images=session.all_images,
             output_path=output_path,
             template_key=template_key,
-            page_size=pdf_style.page_size,
-            font_size_body=pdf_style.font_size_body,
             line_spacing=pdf_style.line_spacing,
             margin_mm=pdf_style.margin_mm,
-            include_page_numbers=pdf_style.include_page_numbers,
             keep_tex=True,
             forced_language=forced_language,
         )
@@ -921,9 +916,9 @@ def _build_preview(paper: dict) -> str:
     return "\n".join(lines)
 
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# UI
+# ────────────────────────────────────────────────────────────────
 
 def _hero_html() -> str:
     return """
@@ -945,9 +940,9 @@ def build_ui() -> gr.Blocks:
     default_template = template_list[0].key if template_list else "general_article"
     template_choices_list = [(tpl.label, tpl.key) for tpl in template_list]
 
-
-
-
+    # Monochrome Research Studio palette — matches lab-forge's ui-new.py.
+    # Primary hue is intentionally slate (not blue/cyan) so the only
+    # saturated accent in the page is the primary action button.
     theme = gr.themes.Base(
         primary_hue="slate",
         secondary_hue="slate",
@@ -967,7 +962,7 @@ def build_ui() -> gr.Blocks:
         gr.HTML(_hero_html())
 
         with gr.Tabs(selected="upload"):
-
+            # ── Tab 1: 模型 & OCR 配置 ──
             with gr.Tab("Model & OCR", id="settings"):
                 with gr.Row():
                     with gr.Column(scale=1):
@@ -1036,7 +1031,7 @@ def build_ui() -> gr.Blocks:
                             value=True,
                         )
 
-
+            # ── Tab 2: 上传与解析 ──
             with gr.Tab("Upload & Parse", id="upload"):
                 with gr.Row():
                     with gr.Column(scale=2):
@@ -1078,7 +1073,7 @@ def build_ui() -> gr.Blocks:
                                 height="auto",
                             )
 
-
+            # ── Tab 3: 选择模板并生成论文 ──
             with gr.Tab("Template & Generate", id="generate"):
                 with gr.Row():
                     with gr.Column(scale=3):
@@ -1105,8 +1100,8 @@ def build_ui() -> gr.Blocks:
                                 elem_classes=["template-info"],
                             )
                             gr.Markdown(
-                                "模板均使用随仓库发布的 LaTeX/Jinja 文件与 TexLive 常见宏包；"
-                                "如需官方像素级样式，可手动把对应 `.sty` / `.cls` 放入 `templates/_assets/`。",
+                                "首次选定带有 `.sty` 依赖的模板时，编译流程会自动从网络拉取该会议的"
+                                "样式文件并缓存到 `templates/_assets/`。下载失败时回退到 TexLive 自带版本。",
                                 elem_classes=["helper-note"],
                             )
 
@@ -1166,7 +1161,7 @@ def build_ui() -> gr.Blocks:
                             gr.Markdown("### 下载")
                             pdf_download = gr.File(label="论文 PDF", interactive=False)
 
-
+        # ── Wiring ──
 
         preset_label.change(
             fn=apply_model_preset,
@@ -1219,9 +1214,9 @@ def build_ui() -> gr.Blocks:
     return demo
 
 
-
-
-
+# ────────────────────────────────────────────────────────────────
+# Main
+# ────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="PaperForge — 论文锻造工坊")

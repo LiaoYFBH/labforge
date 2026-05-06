@@ -48,10 +48,10 @@ _NONFINITE_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-
-
-
+# sklearn / pytorch / scipy patterns emitted on stderr when an optimizer hits
+# its iteration cap before converging. We treat these as blocking findings:
+# accuracy / loss numbers from a non-converged run shouldn't be written into
+# the paper as final results.
 _NONCONVERGENCE_RE = re.compile(
     r"\bConvergenceWarning\b"
     r"|\bmax_iter\s+was\s+reached\b"

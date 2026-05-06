@@ -14,6 +14,19 @@ paper-forge provides an end-to-end pipeline from raw material to academic PDF:
 
 paper-forge runs standalone and also serves as the paper-export backend for upstream agents such as lab-forge.
 
+## Environment recommendations
+
+Linux is recommended. On Windows, use WSL2 with Ubuntu to install and run this project. PDF / LaTeX compilation requires a local LaTeX distribution such as TeX Live, and at least one of `latexmk` / `xelatex` / `pdflatex` must be available from the command line.
+
+For Ubuntu / WSL2:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y latexmk texlive-xetex texlive-latex-recommended \
+    texlive-latex-extra texlive-fonts-recommended texlive-lang-chinese \
+    fonts-noto-cjk
+```
+
 ## Quick start
 
 ```bash
@@ -25,11 +38,11 @@ pip install -r requirements.txt
 python app.py            # default 0.0.0.0:7860
 ```
 
-AI Studio (星河社区) deployment uses `app.py` as the entry point; if the hosting platform requires a fixed file name, point it at `app:main`.
+AI Studio (星河社区) deployment uses `Gradio.app.py` as the entry point.
 
 Once the UI is open:
 
-1. Pick a preset under **Model & OCR** or fill in a custom OpenAI-compatible endpoint.
+1. Pick a preset under **Model Settings** (recommended: `星河社区 · ERNIE 4.5 Turbo 128K`) or fill in a custom OpenAI-compatible endpoint.
 2. Upload a PDF / image, or paste Markdown directly.
 3. Pick a template (default: `article`) and generate the PDF.
 

@@ -27,8 +27,8 @@ def resolve_api_key_for_endpoint(base_url: str = "", model: str = "") -> str:
     endpoint = (base_url or "").strip().lower()
     model_name = (model or "").strip().lower()
 
-
-
+    # AI Studio is an OpenAI-compatible gateway for multiple upstream families
+    # (ERNIE, DeepSeek, Kimi, etc.), so its token should take precedence.
     if "aistudio.baidu.com" in endpoint:
         return _get_first_env("AI_STUDIO_API_KEY", "API_KEY")
 
@@ -55,9 +55,9 @@ def resolve_api_key_for_endpoint(base_url: str = "", model: str = "") -> str:
     )
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Model configuration
+# ---------------------------------------------------------------------------
 
 _FALLBACK_MODEL = "MiniMax-M2.7"
 _FALLBACK_BASE_URL = "https://api.minimaxi.com/v1"
@@ -81,7 +81,7 @@ class ModelConfig:
     现在用空串 sentinel：YAML 显式写值 → 非空 → 不会被 env 覆盖。
     """
 
-
+    # 默认空串作为 sentinel：``__post_init__`` 看到空才会去 env / fallback 找。
     model: str = ""
     api_key: str = ""
     base_url: str = ""
@@ -97,7 +97,7 @@ class ModelConfig:
             self.base_url = env_base or _FALLBACK_BASE_URL
         if not self.model:
             self.model = env_model or _FALLBACK_MODEL
-
+        # API key 仍然只从环境变量读（机密不应进 YAML）
         if not self.api_key:
             self.api_key = resolve_api_key_for_endpoint(
                 base_url=self.base_url,
@@ -105,13 +105,13 @@ class ModelConfig:
             )
 
 
-
+# Backward compatibility alias
 LLMConfig = ModelConfig
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Sandbox configuration (unchanged)
+# ---------------------------------------------------------------------------
 
 @dataclass
 class SandboxConfig:
@@ -125,9 +125,9 @@ class SandboxConfig:
     docker_image: str = "python:3.10-slim"
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Reviewer configuration
+# ---------------------------------------------------------------------------
 
 @dataclass
 class ReviewerConfig:
@@ -135,16 +135,16 @@ class ReviewerConfig:
 
     enabled: bool = True
     model: ModelConfig = field(default_factory=lambda: ModelConfig(
-
-
-
-
+        # 默认走 DeepSeek-V3：和 agent 主模型同一个 AI Studio 套餐，
+        # 用户付费等级允许 deepseek-v3 时，reviewer 不会出现单独的
+        # 401 / invalid_model。老的 ernie-3.5-8k 在 2026 年已从默认
+        # 开放清单撤下，新账户走它会拿到 invalid_model。
         model="deepseek-v3",
         base_url="https://aistudio.baidu.com/llm/lmapi/v3",
         temperature=0.0,
         max_tokens=2048,
     ))
-
+    # Which checkpoints to run reviews at
     checkpoints: list[str] = field(default_factory=lambda: [
         "after_literature",
         "after_experiments",
@@ -153,33 +153,34 @@ class ReviewerConfig:
     ])
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Top-level agent configuration
+# ---------------------------------------------------------------------------
 
 @dataclass
 class AgentConfig:
     """Top-level agent configuration."""
 
     agent_model: ModelConfig = field(default_factory=ModelConfig)
-
-
+    # Legacy alias accepted by older tests/callers. When provided, it becomes
+    # the active agent_model in __post_init__.
     llm: ModelConfig | None = None
     reviewer: ReviewerConfig = field(default_factory=ReviewerConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
 
-
-
-
+    # 0 means adaptive: infer an initial soft budget from task complexity,
+    # extend it while the run is still making progress, and keep a finite
+    # hard cap so a broken run cannot loop forever.
     max_steps: int = 0
     record_trajectory: bool = True
     trajectory_dir: str = "./trajectories"
     ocr_enabled: bool = False
     verbose: bool = True
 
-
-
-
+    # Literature search backend.
+    # ``search_quota`` caps total search_literature calls per run so the
+    # agent must plan its searches up front rather than reactively re-search;
+    # 0 disables the cap.
     search_quota: int = 0
 
     def __post_init__(self):
@@ -198,7 +199,7 @@ class AgentConfig:
         with open(path, "r") as f:
             data = yaml.safe_load(f) or {}
 
-
+        # Detect old format (has "llm" key) vs new format (has "agent_model" key)
         if "llm" in data and "agent_model" not in data:
             return cls._from_legacy_yaml(data)
 

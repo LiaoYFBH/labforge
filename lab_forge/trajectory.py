@@ -21,11 +21,11 @@ class Step:
     """A single step in the agent trajectory."""
 
     step_index: int
-    thought: str
-    action_name: str
-    action_args: dict[str, Any]
-    observation: str
-    success: bool
+    thought: str  # agent's reasoning
+    action_name: str  # tool name
+    action_args: dict[str, Any]  # tool arguments
+    observation: str  # tool output
+    success: bool  # whether the tool call succeeded
     timestamp: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -55,7 +55,7 @@ class Trajectory:
     task_id: str
     task_description: str
     steps: list[Step] = field(default_factory=list)
-    outcome: str = "incomplete"
+    outcome: str = "incomplete"  # "success", "failure", "incomplete"
     total_tokens: int = 0
     start_time: float = field(default_factory=time.time)
     end_time: float | None = None

@@ -9,7 +9,7 @@ def normalize_markdown(text: str, llm=None) -> str:
         return text
     
     if not llm:
-
+        # Fallback if no LLM: try simple cleaning
         text = re.sub(r'<[^>]+>', '', text)
         return text
 

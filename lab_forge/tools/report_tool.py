@@ -38,16 +38,16 @@ from lab_forge.result_guardrails import (
     validate_workspace_results,
 )
 
-
-
-
-
-
-
-
+# Reuse paper_forge's LLM-output cleaner so the section-expansion path here
+# benefits from R1+R2+R3 (\{}command -> \command, "Here is the polished..."
+# prefix removal, \textbf->markdown, display-math isolation, etc.). The
+# previous version just took the LLM string raw, which let \{} pollution
+# and meta-narration prefixes ride straight into the bundle and the
+# downstream PDF (trajectory 203c6c5c paper.tex line 69 had ~50 \{}
+# residues from this exact gap).
 try:
     from paper_forge.paper_writer import _clean_llm_section_output as _pf_clean_section
-except ImportError:
+except ImportError:  # paper_forge unavailable in some test environments
     _pf_clean_section = None
 
 from .base import Tool, ToolResult
@@ -58,9 +58,9 @@ FIGURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg"}
 TABLE_EXTENSIONS = {".csv", ".tsv"}
 
 
-
-
-
+# Section name -> (target_words, minimum_words, role description, must-cover bullets).
+# These mirror paper_forge.style_guide.SECTION_BLUEPRINTS but live here so the
+# expansion still works when paper_forge isn't on the path (e.g. in tests).
 SECTION_TARGETS: dict[str, dict[str, Any]] = {
     "introduction": {
         "target_words": 800,
@@ -143,9 +143,9 @@ SECTION_TARGETS: dict[str, dict[str, Any]] = {
 }
 
 
-
-
-
+# Type alias: a callable that takes a single string prompt and returns the
+# model's reply. Lets us inject a langchain ChatOpenAI / Anthropic / mock
+# without coupling the tool to a specific provider.
 WriterLLM = Callable[[str], str]
 
 
@@ -265,18 +265,18 @@ class GenerateReportTool(Tool):
         task_description: str = "",
     ):
         self.working_dir = Path(working_dir)
-
-
-
+        # Optional writer-LLM used for the per-section expansion pass. When
+        # None we keep the legacy single-pass behaviour so unit tests don't
+        # need to wire up a model.
         self.writer_llm = writer_llm
         self.expand_sections = expand_sections
-
-
-
-
-
-
-
+        # P5 fix: store the task_description so we can detect SURVEY ONLY
+        # mode in ``_validate_experiment_evidence`` and skip the figure /
+        # table requirement. Without this, a survey-only run is forced to
+        # call execute_code purely to fabricate placeholder artifacts to
+        # pass the gate (trajectory 477a3605 generated a ``placeholder.png``
+        # literally containing "NO EXPERIMENTAL RESULTS (SURVEY ONLY TASK)"
+        # just to clear the validator).
         self.task_description = task_description or ""
 
     def _is_survey_mode(self) -> bool:
@@ -413,11 +413,11 @@ class GenerateReportTool(Tool):
         figures: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> ToolResult:
-
-
-
-
-
+        # Deterministic correctness gate. If the workspace contains machine-
+        # detectable invalid results (inf / NaN / negative convergence rate)
+        # the paper may proceed only when the agent explicitly frames them as
+        # invalid or unresolved. This prevents the "broken experiment -> glossy
+        # paper" failure mode even when the main LLM misses the issue.
         result_findings = blocking_findings(
             validate_workspace_results(self.working_dir)
         )
@@ -454,12 +454,12 @@ class GenerateReportTool(Tool):
                     metadata={"result_guardrail_findings": [f.__dict__ for f in result_findings]},
                 )
 
-
-
-
-
-
-
+        # Citation guardrail (Mod 1d): every reference the agent passes must
+        # trace back to a literature_cache.jsonl hit (search_literature) or a
+        # papers/**/manifest.json record (read_paper_fulltext). This prevents
+        # the failure mode we saw repeatedly in 2026-04 trajectories where
+        # the agent invented industry-report citations like "Gartner 2023" /
+        # "MarketReport 2024" that no actual search produced.
         explicit_refs_input = list(references or [])
         unverified = self._find_unverified_references(explicit_refs_input)
         if unverified:
@@ -482,13 +482,13 @@ class GenerateReportTool(Tool):
                 metadata={"unverified_references": unverified},
             )
 
-
-
-
-
-
-
-
+        # Agents tend to forget to forward ``references=`` / ``figures=`` /
+        # ``tables=`` even when their run produced all three. Rather than
+        # let the bundle ship empty (and the rendered PDF therefore have
+        # zero refs and zero figures, which is exactly what the user
+        # complained about), we autodiscover from the workspace whenever
+        # the agent left a slot blank. The agent's explicit values still
+        # win — autodiscovery only fills the gaps.
         autodiscovery_log: list[str] = []
         references, ref_log = self._merge_references_with_cache(explicit_refs_input)
         if ref_log:
@@ -502,16 +502,16 @@ class GenerateReportTool(Tool):
             if tbl_log:
                 autodiscovery_log.append(tbl_log)
 
-
-
-
-
-
-
-
-
-
-
+        # P0a path-existence gate (REFACTOR_PLAN.md follow-up).
+        #
+        # Agents under a tight step budget sometimes pass figure/table paths
+        # that don't actually exist on disk — e.g. trajectory c032bbf1
+        # passed ``figures=[{'path': 'training_loss.png'}]`` and
+        # ``tables=[{'path': 'optimizer_comparison.csv'}]`` despite never
+        # calling plt.savefig / to_csv. The bundle then ships with broken
+        # references; paper_writer LLM happily expands prose around the
+        # nonexistent figures, the PDF compiler embeds nothing, and the
+        # final paper is fabricated. Cheaper to catch it here.
         path_gate = self._validate_artifact_paths(figures or [], tables or [])
         if path_gate:
             return ToolResult(
@@ -638,9 +638,9 @@ class GenerateReportTool(Tool):
             _add(value)
         return "\n".join(parts)
 
-
-
-
+    # ------------------------------------------------------------------
+    # Per-section expansion pipeline
+    # ------------------------------------------------------------------
 
     def _expand_all_sections(
         self,
@@ -659,8 +659,8 @@ class GenerateReportTool(Tool):
         """
         abstract_preview = (abstract or "")[:280] or "(empty)"
         references_preview = self._format_references_preview(references)
-
-
+        # Compute run_facts ONCE per generate_report call — scanning logs/ and
+        # CSVs twice for every section is wasted IO.
         run_facts = self._collect_run_facts()
 
         expanded: dict[str, str] = {}
@@ -694,8 +694,8 @@ class GenerateReportTool(Tool):
                 )
                 expanded[key] = final
             except Exception as exc:
-
-
+                # Don't lose the agent's draft if the writer LLM fails — fall
+                # back to the original outline so the bundle is still valid.
                 logger.warning("Section expansion failed for '%s': %s", key, exc)
                 log.append(f"{key}: expansion FAILED ({exc}); kept original draft")
                 expanded[key] = text
@@ -757,9 +757,9 @@ class GenerateReportTool(Tool):
             preview += f" … (+{len(references) - 8} more)"
         return preview
 
-
-
-
+    # Cap run_facts to keep the writer LLM's prompt under ~6 KB. Anything past
+    # this is almost certainly redundant log output, not extra hyperparameter
+    # ground truth.
     _RUN_FACTS_BUDGET_CHARS = 6000
     _RUN_FACTS_PER_SCRIPT_BUDGET = 1500
     _RUN_FACTS_PER_CSV_ROW_LIMIT = 8
@@ -889,15 +889,15 @@ class GenerateReportTool(Tool):
                     files.append(f.name)
         return files
 
+    # ------------------------------------------------------------------
+    # Auto-discovery — used when the agent forgot to forward references /
+    # figures / tables. We never invent content, only surface what's
+    # actually on disk in the run's workspace.
+    # ------------------------------------------------------------------
 
-
-
-
-
-
-
-
-
+    # Subdirectories where auto-discovery should NOT look. Files here
+    # belong to the user (uploads), the OCR cache (papers), or the
+    # framework's own bookkeeping (logs, dictionary caches).
     _AUTODISCOVERY_SKIP_DIRS = (
         "uploads", "papers", "logs", ".remote_images",
         "literature_cache", "data", "node_modules",
@@ -1038,7 +1038,7 @@ class GenerateReportTool(Tool):
                             u = (rec.get(key) or "").strip().lower()
                             if u:
                                 urls.add(u)
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - best-effort read
                 logger.debug("Reading literature_cache.jsonl for ref-index failed: %s", exc)
 
         papers_root = self.working_dir / "papers"
@@ -1057,7 +1057,7 @@ class GenerateReportTool(Tool):
                         u = (rec.get(key) or "").strip().lower()
                         if u:
                             urls.add(u)
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - best-effort read
                 logger.debug("Reading papers/**/manifest.json for ref-index failed: %s", exc)
 
         return titles, urls
@@ -1093,8 +1093,8 @@ class GenerateReportTool(Tool):
             if not title:
                 continue
             if len(title.split()) < 3:
-
-
+                # Short titles get URL-only verification to keep false-positive
+                # rate down. The agent should pass URLs anyway per system prompt.
                 continue
             if title in norm_ref:
                 return True
@@ -1114,9 +1114,9 @@ class GenerateReportTool(Tool):
         if not cleaned:
             return []
         titles, urls = self._build_verified_reference_index()
-
-
-
+        # If the workspace has no cache at all, the agent claimed citations
+        # without ever search_literature/read_paper_fulltext'ing — every
+        # explicit ref is unverified and we surface them all.
         if not titles and not urls:
             return cleaned
         return [
@@ -1164,11 +1164,11 @@ class GenerateReportTool(Tool):
             )
         return merged, "; ".join(logs)
 
-
-
-
-
-
+    # Iteration suffixes the agent appends when re-running an experiment with
+    # tweaked hyperparameters. ``accuracy_comparison.png`` and
+    # ``accuracy_comparison_refined.png`` are the same figure family — only
+    # the latest belongs in the paper. We strip the suffix when computing
+    # the family key, then keep the most-recently-modified path.
     _ITERATION_SUFFIX_RE = re.compile(
         r"_(?:refined|final|new|fixed|updated|improved|rev\d+|v\d+)$",
         re.IGNORECASE,
@@ -1204,10 +1204,10 @@ class GenerateReportTool(Tool):
             if mtime > existing_mtime:
                 family_best[family_key] = (path, entry)
             elif mtime == existing_mtime:
-
-
-
-
+                # Test/CI envs can produce identical mtimes when files are
+                # written within the same FS tick. Tie-break by stem length:
+                # the longer stem is the suffixed variant (``foo_refined``
+                # over ``foo``), which is the intended winner.
                 if len(path.stem) > len(existing[0].stem):
                     family_best[family_key] = (path, entry)
 

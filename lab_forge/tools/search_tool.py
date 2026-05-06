@@ -1,10 +1,9 @@
 """
 Literature search tool. Uses the public arXiv API.
 
-The tool persists every successful query to ``literature_cache.jsonl`` so
-downstream guardrails (citation validation in ``generate_report``) can compare
-against a single source-of-truth list of papers the agent actually saw this
-run.
+Every successful query is appended to ``literature_cache.jsonl`` so downstream
+guardrails (citation validation in ``generate_report``) can compare against a
+single source-of-truth list of papers the agent actually saw this run.
 """
 
 from __future__ import annotations
@@ -34,10 +33,10 @@ HTTP_HEADERS = {
     "User-Agent": "LabForge/0.1 (literature search; contact: local-user)"
 }
 
-
-
-
-
+# Network exceptions that are worth retrying. SSLError shows up frequently in
+# real-world arXiv calls when intermediate TLS-terminating boxes drop the
+# handshake (SSLEOFError); ConnectionError/Timeout/ChunkedEncodingError are the
+# classic transient failures.
 _RETRYABLE_EXCEPTIONS = (
     SSLError,
     RequestsConnectionError,
@@ -50,12 +49,12 @@ DEFAULT_MAX_ATTEMPTS = 4
 INITIAL_BACKOFF_SECONDS = 1.5
 MAX_BACKOFF_SECONDS = 15.0
 
-
-
-
-
-
-
+# Relevance filter — applied to every backend hit before persisting to
+# literature_cache.jsonl. Trajectory 5bfb6c8d's MNIST run kept arXiv hits like
+# "Maximum Clique distributed algorithm" and "Non-integrable supersymmetries"
+# because the upstream APIs over-recall when query terms are common. We
+# require at least half the meaningful query tokens to appear (as substrings)
+# in the paper's title+abstract before we let it into the cache.
 RELEVANCE_THRESHOLD = 0.5
 _TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 _STOPWORDS = frozenset({
@@ -74,8 +73,8 @@ def _query_tokens(query: str) -> set[str]:
     for tok in raw:
         if tok in _STOPWORDS:
             continue
-
-
+        # crude stem: drop trailing 's' on words longer than 4 chars so
+        # "algorithms" matches abstracts that say "algorithm".
         if len(tok) > 4 and tok.endswith("s"):
             tok = tok[:-1]
         tokens.add(tok)
@@ -180,13 +179,13 @@ def _http_get_with_retry(
                 attempt_log.append(note)
             if attempt == max_attempts:
                 resp.raise_for_status()
-                return resp
+                return resp  # pragma: no cover - raise_for_status must trigger
             _sleep_backoff(attempt, retry_after=_parse_retry_after(resp))
             continue
 
         return resp
 
-
+    # Defensive: the loop above should always either return or raise.
     assert last_exc is not None
     raise last_exc
 
@@ -217,7 +216,7 @@ def _search_arxiv(query: str, limit: int, attempt_log: list[str] | None = None) 
     for entry in entries:
         title = entry.findtext("atom:title", "", ns).strip().replace("\n", " ")
         summary = entry.findtext("atom:summary", "", ns).strip().replace("\n", " ")
-        published = entry.findtext("atom:published", "", ns)[:4]
+        published = entry.findtext("atom:published", "", ns)[:4]  # year
         link = entry.findtext("atom:id", "", ns).strip()
         pdf_link = ""
         for candidate in entry.findall("atom:link", ns):
@@ -283,9 +282,9 @@ class SearchLiteratureTool(Tool):
     ):
         self.max_results = max_results
         self.working_dir = working_dir
-
-
-
+        # Per-run quota: every successful + failed call counts toward this so
+        # the agent can't loop on reactive re-searches. Set externally via
+        # ``set_quota`` (UI-configurable); 0 means unlimited.
         self._quota: int = 0
         self._calls_used: int = 0
 
@@ -301,14 +300,13 @@ class SearchLiteratureTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Search for academic papers via arXiv (free, ML/CS-heavy). Returns "
-            "paper titles, authors, year, abstract, and an open-access PDF URL "
-            "when available. Use this to find related work, understand "
-            "baselines, or check if an approach already exists. Plan all your "
-            "queries up front (Phase 1) — this tool has a per-run quota so "
-            "reactive re-searching wastes budget. If you need to inspect the "
-            "actual paper contents, follow up with read_paper_fulltext on a "
-            "promising result."
+            "Search for academic papers via arXiv. Returns paper titles, "
+            "authors, year, abstract, and an open-access PDF URL when available. "
+            "Use this to find related work, understand baselines, or check if an "
+            "approach already exists. Plan all your queries up front (Phase 1) — "
+            "this tool has a per-run quota so reactive re-searching wastes budget. "
+            "If you need to inspect the actual paper contents, follow up with "
+            "read_paper_fulltext on a promising result."
         )
 
     @property
@@ -353,9 +351,9 @@ class SearchLiteratureTool(Tool):
     def execute(self, query: str, max_results: int | None = None) -> ToolResult:
         limit = max_results or self.max_results
 
-
-
-
+        # Quota check FIRST so a denied call doesn't even hit the network. Note
+        # we still count denied calls — that prevents an agent from bypassing
+        # the quota by retrying after a quota-exhaustion message.
         if self._quota > 0 and self._calls_used >= self._quota:
             return ToolResult(
                 output=(
@@ -375,6 +373,7 @@ class SearchLiteratureTool(Tool):
         attempt_log: list[str] = []
         papers: list[dict] = []
         failure: Exception | None = None
+        backend_used = "arxiv"
 
         try:
             papers = _search_arxiv(query, limit, attempt_log=attempt_log)
@@ -410,12 +409,12 @@ class SearchLiteratureTool(Tool):
                     metadata={
                         "num_results": 0,
                         "num_dropped_low_relevance": len(dropped),
-                        "source": "arxiv",
+                        "source": backend_used or "arxiv",
                         "calls_used": self._calls_used,
                         "quota": self._quota,
                     },
                 )
-            self._persist_cache(query, "arxiv", kept)
+            self._persist_cache(query, backend_used or "arxiv", kept)
             quota_note = ""
             if self._quota > 0:
                 quota_note = (
@@ -428,7 +427,7 @@ class SearchLiteratureTool(Tool):
                 metadata={
                     "num_results": len(kept),
                     "num_dropped_low_relevance": len(dropped),
-                    "source": "arxiv",
+                    "source": backend_used or "arxiv",
                     "calls_used": self._calls_used,
                     "quota": self._quota,
                 },
@@ -441,7 +440,7 @@ class SearchLiteratureTool(Tool):
                 detail += "\n\nRetry log:\n- " + "\n- ".join(attempt_log)
             return ToolResult(
                 output=(
-                    "Literature search failed "
+                    "Literature search failed against arXiv "
                     f"({reason}). This is usually a transient network issue — "
                     "try again, or proceed while explicitly noting the "
                     "literature-search limitation."
@@ -451,7 +450,7 @@ class SearchLiteratureTool(Tool):
                 metadata={"calls_used": self._calls_used, "quota": self._quota},
             )
 
-
+        # arXiv responded successfully but with zero entries.
         detail = ""
         if attempt_log:
             detail = "\n\nRetry log:\n- " + "\n- ".join(attempt_log)

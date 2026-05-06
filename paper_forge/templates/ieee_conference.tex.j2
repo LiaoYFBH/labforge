@@ -1,10 +1,12 @@
-\documentclass[conference,((( class_font_size )))]{IEEEtran}
+% IEEE Conference template (IEEEtran)
+% Suitable for CVPR, ICCV, ICRA, INFOCOM and most IEEE-style venues.
+\documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
 
 ((* if has_cjk *))
 \usepackage[UTF8,fontset=fandol]{ctex}
 ((* endif *))
-\usepackage[((( page_size ))),margin=((( margin_mm )))mm]{geometry}
+\usepackage[a4paper,margin=((( margin_mm )))mm]{geometry}
 \usepackage{cite}
 \usepackage{graphicx}
 \usepackage{booktabs}
@@ -17,7 +19,6 @@
 \usepackage{caption}
 \usepackage{float}
 \usepackage{enumitem}
-\usepackage{setspace}
 
 \hypersetup{
     colorlinks=true,
@@ -28,14 +29,8 @@
 \sloppy
 \emergencystretch=2em
 \allowdisplaybreaks
-\setstretch{((( line_spacing )))}
-\AtBeginDocument{\fontsize{((( body_font_size )))}{((( body_baseline_skip )))}\selectfont}
 
 \begin{document}
-((* if not include_page_numbers *))
-\pagestyle{empty}
-\pagenumbering{gobble}
-((* endif *))
 
 \title{((( title )))}
 

@@ -1,0 +1,37 @@
+# Smoke-test config: tight step budget, shorter output limits.
+# Keeps the quick terminal validation cheap.
+
+agent_model:
+  model: "MiniMax-M2.7"
+  api_key: ""
+  base_url: "https://api.minimaxi.com/v1"
+  temperature: 0.0
+  max_tokens: 4096
+  timeout: 180
+
+reviewer:
+  enabled: true
+  model:
+    model: "ernie-4.5-turbo-128k-preview"
+    api_key: ""
+    base_url: "https://aistudio.baidu.com/llm/lmapi/v3"
+    temperature: 0.0
+    max_tokens: 2048
+  checkpoints:
+    - after_literature
+    - before_report
+
+sandbox:
+  backend: "subprocess"
+  timeout: 180
+  max_output_length: 6000
+  working_dir: "/tmp/lab_forge_workspace"
+  # Auto-detect: uses the interpreter that runs lab_forge. Override only
+  # if you need a different env (e.g. one with rdkit/deepchem pre-installed).
+  python_executable: ""
+
+max_steps: 20
+record_trajectory: true
+trajectory_dir: "./trajectories"
+ocr_enabled: false
+verbose: false

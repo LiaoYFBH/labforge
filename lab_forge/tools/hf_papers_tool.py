@@ -48,15 +48,15 @@ HTTP_HEADERS = {
     "Accept": "text/html,application/json",
 }
 
-
+# arXiv id patterns we accept: 4-digit YYMM.NNNNN with optional vN suffix.
 _ARXIV_ID_PATTERN = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")
-
-
-
+# Older-style ids like "cs.CV/0301001" or "math/0211159" — also acceptable.
+# Subject suffix is 2 letters; we already lowercase the input above so the
+# pattern matches against ``[a-z]{2}`` rather than ``[A-Z]{2}``.
 _OLD_ARXIV_ID_PATTERN = re.compile(r"^[a-z\-]+(?:\.[a-z]{2})?/\d{7}(?:v\d+)?$")
 
-
-
+# GitHub repo extraction: match owner/repo pairs but exclude `tree`, `blob`,
+# and other non-repo paths so we end up with clone-friendly URLs.
 _GITHUB_REPO_RE = re.compile(
     r"https?://github\.com/([A-Za-z0-9][A-Za-z0-9\-_.]*)/([A-Za-z0-9][A-Za-z0-9\-_.]*)(?=[\"'/?#\s]|$)"
 )
@@ -65,9 +65,9 @@ _GITHUB_NON_REPO_OWNERS = {
     "settings", "notifications", "explore",
 }
 
-
+# HF model / dataset / space references: parse anchor hrefs.
 _HF_MODEL_RE = re.compile(r"https?://huggingface\.co/([A-Za-z0-9][A-Za-z0-9\-_.]+)/([A-Za-z0-9][A-Za-z0-9\-_.]+)(?=[\"'/?#\s]|$)")
-
+# Reserved HF org-level paths that aren't model repos.
 _HF_RESERVED_PATHS = {
     "papers", "datasets", "spaces", "blog", "docs", "models",
     "tasks", "pricing", "settings", "join", "login", "api",
@@ -81,7 +81,7 @@ def _normalize_arxiv_id(raw: str) -> str | None:
     if not text:
         return None
     text = text.lower().removeprefix("arxiv:").strip()
-
+    # Strip URL prefixes
     if "arxiv.org/abs/" in text:
         text = text.split("arxiv.org/abs/", 1)[1]
     if "arxiv.org/pdf/" in text:
@@ -144,7 +144,7 @@ def _extract_github_repos(html: str) -> list[str]:
         owner, repo = match.group(1), match.group(2)
         if owner.lower() in _GITHUB_NON_REPO_OWNERS:
             continue
-
+        # Strip trailing punctuation / .git suffix for canonical clone URL.
         repo = repo.removesuffix(".git")
         url = f"https://github.com/{owner}/{repo}"
         if url not in seen:
@@ -170,7 +170,7 @@ def _extract_hf_artefacts(html: str) -> dict[str, list[str]]:
 
     for href_match in re.finditer(r'href="(/[^"]+)"', html):
         path = href_match.group(1)
-
+        # datasets and spaces paths are well-known prefixes
         if path.startswith("/datasets/"):
             tail = path[len("/datasets/"):].split("?", 1)[0].split("#", 1)[0]
             parts = tail.split("/")
@@ -189,8 +189,8 @@ def _extract_hf_artefacts(html: str) -> dict[str, list[str]]:
                     seen_spaces.add(full)
                     spaces.append(full)
             continue
-
-
+        # Models: /owner/repo (no leading namespace prefix). Strict filter to
+        # avoid catching docs / API / non-repo paths.
         parts = path.lstrip("/").split("?", 1)[0].split("#", 1)[0].split("/")
         if len(parts) == 2 and parts[0] and parts[1] and parts[0] not in _HF_RESERVED_PATHS:
             full = f"https://huggingface.co/{parts[0]}/{parts[1]}"
@@ -198,7 +198,7 @@ def _extract_hf_artefacts(html: str) -> dict[str, list[str]]:
                 seen_models.add(full)
                 models.append(full)
 
-
+    # Cap each list to 10 to keep the tool output manageable.
     return {
         "models": models[:10],
         "datasets": datasets[:10],

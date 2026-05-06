@@ -53,12 +53,12 @@ from lab_forge.workflow import (
 
 logger = logging.getLogger(__name__)
 
-
-
-
-
-
-
+# ``web.py`` lives at ``<repo_root>/lab_forge/web.py``. The project's
+# trajectories/ folder + paper_forge/ sibling and friends live one level
+# UP, at ``<repo_root>/``. (Pre-refactor this module was at the repo root
+# as ``ui.py`` so a single ``.parent`` resolved correctly; that's no longer
+# true and using ``.parent`` here would silently route artefacts into the
+# package directory.)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PAPER_FORGE_ROOT = PROJECT_ROOT / "paper_forge"
 DEFAULT_TRAJ_DIR = PROJECT_ROOT / "trajectories"
@@ -74,10 +74,10 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on", "y")
 
 
-
-
-
-
+# Feature flag for shared deployments (e.g., 星河社区 / AI Studio): when this is
+# false, the "运行记录" history tab is hidden so other users can't browse the
+# trajectories produced by previous sessions on the same instance. Toggle via
+# ``SCIPRM_SHOW_HISTORY=false`` in .env (or env var) before launching the UI.
 SHOW_HISTORY_TAB = _env_bool("SCIPRM_SHOW_HISTORY", True)
 
 PHASE_LABELS = {
@@ -458,8 +458,8 @@ def _format_action_input(action_name: str, args: dict[str, Any]) -> str:
             details.append(f"**Title** `{title}`")
         return "\n" + "\n".join(details) + "\n" if details else ""
 
-
-
+    # Generic fallback: short repr of the args so the user still sees
+    # *something* rather than a blank card.
     try:
         rendered = json.dumps(args, ensure_ascii=False, indent=2, default=str)
     except Exception:
@@ -473,8 +473,8 @@ def _format_step_card_from_dict(step_info: dict[str, Any], idx: int) -> str:
     action_name = step_info.get("action_name", "unknown")
     phase = _phase_for_action(action_name)
 
-
-
+    # Render human-in-the-loop cards distinctly so users can see exactly when
+    # their interventions reached the agent.
     if action_name in ("human_feedback", "human_abort", "human_review"):
         label = PHASE_LABELS.get("human", "用户介入")
         body = (step_info.get("observation") or step_info.get("thought") or "").strip()
@@ -499,7 +499,7 @@ def _format_step_card_from_dict(step_info: dict[str, Any], idx: int) -> str:
     if len(observation) > 1600:
         observation = observation[:1600] + "\n… (truncated)"
 
-
+    # "plan" steps have no tool output — render a compact thinking card.
     if action_name == "plan":
         reasoning_body = thought or "（模型本轮未输出显式推理）"
         return (
@@ -507,11 +507,11 @@ def _format_step_card_from_dict(step_info: dict[str, Any], idx: int) -> str:
             f"{reasoning_body}\n\n---\n"
         )
 
-
-
-
-
-
+    # Reviewer review cards — highlight pass/fail and show the review body
+    # directly instead of wrapping it in a tool-call frame. The callback also
+    # emits a lightweight "thinking" placeholder (phase=thinking in metadata)
+    # right before calling the reviewer LLM so the UI doesn't go silent
+    # during the review — render that with a distinct badge.
     if action_name == "reviewer_review":
         metadata = step_info.get("metadata") or {}
         if metadata.get("phase") == "thinking":
@@ -527,10 +527,10 @@ def _format_step_card_from_dict(step_info: dict[str, Any], idx: int) -> str:
             f"{_safe_code_fence(observation)}\n\n---\n"
         )
 
-
-
-
-
+    # For code / bash / file_write steps, show the actual input the agent
+    # sent to the tool so the user can see the exact experiment being run
+    # — not just the output it produced. Otherwise it's impossible to tell
+    # a real execution apart from fabricated data.
     input_block = _format_action_input(action_name, step_info.get("action_args") or {})
 
     return (
@@ -695,10 +695,10 @@ class AgentRunner:
             ".txt",
             ".pdf",
             ".md",
-
-
-
-
+            # Exec audit artefacts — the actual script the agent ran and the
+            # matching stdout/stderr log. Surfacing them in the UI is the
+            # whole point of the audit trail: the CSV is only trustworthy if
+            # you can match it to a real script + log.
             ".log",
             ".py",
             ".sh",
@@ -1169,10 +1169,10 @@ def _build_runtime_config(
             backend="subprocess",
             timeout=300,
             working_dir=str(sandbox_dir),
-
-
-
-
+            # Empty → auto-detect (uses the interpreter that runs the UI).
+            # Override via the SCIPRM_PYTHON_EXECUTABLE env var if you want
+            # code to run under a different env, e.g. one with heavy domain
+            # packages (rdkit, deepchem, etc.) pre-installed.
             python_executable=os.environ.get("SCIPRM_PYTHON_EXECUTABLE", ""),
         ),
         max_steps=max_steps,
@@ -1239,8 +1239,8 @@ def _stage_attachments_into_sandbox(
         src = Path(src_path)
         if not src.exists() or not src.is_file():
             continue
-
-
+        # Preserve the user-visible filename. If two uploads share a name,
+        # prefix with a counter so neither is silently dropped.
         target = uploads_dir / src.name
         if target.exists():
             stem, suffix = target.stem, target.suffix
@@ -1307,12 +1307,12 @@ def _attachments_brief(staged: list[dict[str, str]], ocr_enabled: bool) -> str:
             "读取 .md / .txt / .json / .csv 等文本资料。读取后再回答用户的问题。"
         )
 
-
-
-
-
-
-
+    # When the user uploaded papers, those uploads are almost always the
+    # primary research artifact (e.g. "improve the algorithm in this paper").
+    # Without this rule the agent treats arXiv search as the main entry
+    # point and burns through its quota on tangential queries — exactly
+    # what we saw on trajectory 32afa51f (19 search_literature calls, 11
+    # quota-denied, while the actual uploaded paper was already on disk).
     if has_pdf:
         lines.append("")
         lines.append(
@@ -1381,7 +1381,7 @@ def chat_main_stream(
         )
         return
 
-
+    # Append the user's bubble + a bootstrap assistant card.
     history.append({"role": "user", "content": text})
     history.append({
         "role": "assistant",
@@ -1467,18 +1467,18 @@ def chat_main_stream(
         )
         time.sleep(0.4)
 
-
+    # Drain anything that arrived after the loop's last poll.
     with _runner._lock:
         new_steps = _runner.steps_md[last_seen:]
         last_seen = len(_runner.steps_md)
     for step_md in new_steps:
         history.append({"role": "assistant", "content": step_md})
 
-
-
-
-
-
+    # Final summary turn. Whether to invite the user to "download the
+    # report" depends on whether the agent actually wrote one — calling
+    # submit_result with a textual summary alone does NOT produce
+    # research_report.md / paperforge_bundle.json. Lying about it ("go
+    # download the PDF") wastes the user's time. Check the sandbox.
     if _runner.status == "error":
         history.append({"role": "assistant", "content": f"运行出错：\n```\n{_runner.error_msg}\n```"})
     else:
@@ -1515,8 +1515,8 @@ def chat_main_stream(
                     ),
                 })
             else:
-
-
+                # Agent submitted a text result but never wrote a real
+                # report. Don't promise downloads that don't exist.
                 missing_note = (
                     "`research_report.md` 与 `paperforge_bundle.json` 都未生成 —— "
                     "Agent 提交了文本总结但没调 `generate_report` 工具。"
@@ -1617,10 +1617,10 @@ def _file_download_update(path: Path | None):
     return gr.update(value=str(path), visible=True)
 
 
-
-
-
-
+# Subdirectories of a sandbox we deliberately exclude from the
+# "Full bundle" zip — they're either user input (uploads), throwaway OCR
+# downloads (papers — the cached PDF chunks read by read_paper_fulltext)
+# or the framework's signed-URL temporary cache.
 _FULL_BUNDLE_SKIP_DIRS = {"uploads", ".remote_images"}
 
 
@@ -1651,14 +1651,14 @@ def build_full_bundle_zip(workspace_dir: Path | None = None) -> Path | None:
     if workspace_dir is None or not workspace_dir.exists():
         return None
 
-
-
-
+    # Use a stable name keyed off the run id (the sandbox dir name) so
+    # repeat downloads overwrite the previous bundle instead of piling
+    # up an unbounded number of zips on disk.
     bundle_name = f"lab_forge_run_{workspace_dir.name}.zip"
     bundle_path = workspace_dir / bundle_name
 
-
-
+    # Always rebuild — the agent may have appended new artefacts since
+    # the last download, so a stale zip would mislead the user.
     if bundle_path.exists():
         try:
             bundle_path.unlink()
@@ -1673,10 +1673,10 @@ def build_full_bundle_zip(workspace_dir: Path | None = None) -> Path | None:
                 rel = f.relative_to(workspace_dir)
             except ValueError:
                 continue
-
+            # Don't recurse into excluded dirs.
             if any(part in _FULL_BUNDLE_SKIP_DIRS for part in rel.parts):
                 continue
-
+            # Don't include the bundle in itself.
             if f.name == bundle_name:
                 continue
             try:
@@ -1911,8 +1911,8 @@ def convert_report_to_pdf(
 
         forced_language = paper_language if paper_language in ("zh", "en") else None
 
-
-
+        # Top-conference expansion always runs. Reuses the agent's LLM
+        # credentials so the user doesn't configure a second model.
         expansion_status = ""
         saved_settings, _ = load_ui_settings()
         effective_model = (agent_model or "").strip() or saved_settings.agent_model
@@ -2048,8 +2048,8 @@ def _trajectory_label(path: Path) -> str:
     if not desc:
         preview = "(无主题描述)"
     else:
-
-
+        # Use the first non-empty line as the headline; strip section markers
+        # like "## Research Task" if the prompt template prefixed them.
         first = ""
         for line in desc.splitlines():
             line = line.strip().lstrip("#").strip()

@@ -158,9 +158,9 @@ class FileReadTool(Tool):
 class FileWriteTool(Tool):
     """Write a file to the workspace."""
 
-
-
-
+    # Text-style artefacts the agent is allowed to author directly. Data files
+    # (CSV, NPY, PNG, etc.) must come out of `execute_code` so the workspace
+    # never contains AI-fabricated "results".
     ALLOWED_EXTENSIONS = {
         ".py", ".sh", ".md", ".txt",
         ".yaml", ".yml", ".toml", ".ini", ".cfg",
@@ -220,7 +220,7 @@ class FileWriteTool(Tool):
 
         suffix = PurePosixPath(path).suffix.lower()
         if not suffix:
-
+            # No extension — treat as plain text, allow.
             return None
         if suffix in self.FORBIDDEN_EXTENSIONS:
             return (

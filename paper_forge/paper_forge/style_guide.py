@@ -38,9 +38,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-
-
-
+# ──────────────────────────────────────────────────────────────────────
+# Per-section blueprints (compiled from the DPO paper analysis above)
+# ──────────────────────────────────────────────────────────────────────
 
 @dataclass
 class SectionBlueprint:
@@ -243,7 +243,7 @@ def scaled_blueprints(target_total_words: int | None) -> list[SectionBlueprint]:
             out.append(bp)
             continue
         new_target = max(int(round(bp.target_words * scale)), 100)
-
+        # keep minimum at ~70% of new target so retries still trigger.
         new_minimum = max(int(round(new_target * 0.7)), 70)
         out.append(SectionBlueprint(
             kind=bp.kind,
@@ -278,9 +278,9 @@ def blueprint_for_in(
     return None
 
 
-
-
-
+# ──────────────────────────────────────────────────────────────────────
+# Cross-cutting writing rules
+# ──────────────────────────────────────────────────────────────────────
 
 GLOBAL_VOICE = """\
 通用写作风格（与顶会论文一致）：
@@ -311,9 +311,9 @@ ANTI_FABRICATION = """\
 """
 
 
-
-
-
+# ──────────────────────────────────────────────────────────────────────
+# Composing the in-context style guide for the LLM
+# ──────────────────────────────────────────────────────────────────────
 
 REFERENCE_NOTE = (
     "本指南基于真实顶会样本（NeurIPS 2023, DPO 论文）的章节字数与结构分析"
@@ -357,9 +357,9 @@ def section_brief(blueprint: SectionBlueprint, target_language_name: str) -> str
     )
 
 
-
-
-
+# ──────────────────────────────────────────────────────────────────────
+# Optional: refresh the blueprint from a real PDF (offline tool)
+# ──────────────────────────────────────────────────────────────────────
 
 def extract_blueprint_from_pdf(pdf_path: str | Path) -> dict[str, dict]:
     """Read a PDF and produce a dict of {section_kind: {words, paragraphs}}.
@@ -368,7 +368,7 @@ def extract_blueprint_from_pdf(pdf_path: str | Path) -> dict[str, dict]:
     based on a different reference paper. Requires ``pypdf`` to be importable.
     """
     try:
-        from pypdf import PdfReader
+        from pypdf import PdfReader  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
             "pypdf is required for extract_blueprint_from_pdf; "

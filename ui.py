@@ -15,21 +15,21 @@ from pathlib import Path
 
 import gradio as gr
 
-
-
-
-
-
+# ---------------------------------------------------------------------------
+# Backend reuse — every handler below comes from ``lab_forge.web`` (the chat
+# runtime, settings handlers, paper-export handlers, trajectory readers, and
+# all HTML rendering helpers). This file owns layout / wiring only.
+# ---------------------------------------------------------------------------
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR
 if str(_REPO_ROOT) not in sys.path:
-
-
+    # When ui-new.py is launched directly (``python ui-new.py``) the ``lab_forge``
+    # package needs to be importable from the repo root.
     sys.path.insert(0, str(_REPO_ROOT))
 
-from lab_forge import web as backend
-legacy_ui = backend
-from lab_forge.web import (
+from lab_forge import web as backend  # noqa: E402
+legacy_ui = backend  # backward-compat alias used by older helpers below
+from lab_forge.web import (  # noqa: E402
     CUSTOM_PRESET_LABEL,
     DEFAULT_SETTINGS_PATH,
     PAPER_FORGE_ROOT,
@@ -71,9 +71,9 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Static markup helpers (sidebar / header). All purely presentational.
+# ---------------------------------------------------------------------------
 def _brand_block_html() -> str:
     return (
         '<div class="brand-block">'
@@ -306,10 +306,10 @@ def _format_size(path: Path | None) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-
-
-
-
+# ---------------------------------------------------------------------------
+# Custom CSS — the heart of the redesign. Strict monochrome, 4/8pt grid,
+# Serif content + Sans UI typography. No gradients, no glassmorphism.
+# ---------------------------------------------------------------------------
 CUSTOM_CSS = """
 :root {
   --sp-bg: #ffffff;
@@ -1319,11 +1319,11 @@ label, .gr-form > label, .label {
 """
 
 
-
-
-
-
-
+# ---------------------------------------------------------------------------
+# Wrappers — extend a few backend handlers so the new sidebar widgets stay
+# in sync with run state. They DO NOT touch backend behaviour, only fan out
+# extra UI-only outputs that derive from already-published runner state.
+# ---------------------------------------------------------------------------
 def _live_sidebar_outputs():
     """Snapshot the runner and rebuild sidebar widgets that depend on it.
 
@@ -1376,10 +1376,10 @@ def open_project_in_archive(task_id: str):
     """
     if not task_id:
         return (
-            gr.update(),
-            gr.update(),
-            "*该项目还没有可读取的内容。*",
-            "{}",
+            gr.update(),                          # tabs (no-op)
+            gr.update(),                          # traj_select
+            "*该项目还没有可读取的内容。*",        # traj_view
+            "{}",                                 # traj_json_view
         )
     return (
         gr.update(selected="archive"),
@@ -1402,9 +1402,9 @@ def convert_pdf_with_doc(*args, **kwargs):
     return (*artefact_tuple, _document_preview_html(report_path))
 
 
-
-
-
+# ---------------------------------------------------------------------------
+# Build the Gradio app.
+# ---------------------------------------------------------------------------
 def create_ui() -> gr.Blocks:
     theme = gr.themes.Base(
         primary_hue="slate",
@@ -1451,10 +1451,10 @@ def create_ui() -> gr.Blocks:
     initial_traj_choices = list_trajectory_choices() if SHOW_HISTORY_TAB else []
 
     initial_paper_dir, initial_report_path, initial_bundle_path, _initial_pdf_path = _find_paper_artifacts()
-
-
-
-
+    # Do not preload an existing PDF into the Export/Manuscript panels. A
+    # previous run's PDF made the current run look exported before the user
+    # pressed "Export PDF". Existing papers are still visible in Saved Papers;
+    # the live Manuscript preview is populated by Export/Refresh actions.
     initial_pdf_path = None
 
     initial_pipeline_html = _build_research_pipeline_html(
@@ -1462,7 +1462,7 @@ def create_ui() -> gr.Blocks:
     )
     initial_evidence_html = _build_evidence_trace_html([], "idle")
 
-
+    # Try to load PaperForge templates without requiring the dependency.
     try:
         if str(PAPER_FORGE_ROOT) not in sys.path:
             sys.path.insert(0, str(PAPER_FORGE_ROOT))
@@ -1473,11 +1473,11 @@ def create_ui() -> gr.Blocks:
         _template_choices = [("通用 article", "general_article")]
         _default_template_key = "general_article"
 
-
-
-
-
-
+    # Gradio's Textbox `submit` event only fires on Ctrl+Enter for multi-line
+    # boxes, so we wire the textarea's keydown ourselves: plain Enter clicks
+    # the Send button, Shift+Enter falls through to the textarea's native
+    # newline. We wrap in a MutationObserver because Gradio mounts components
+    # asynchronously and the textarea may not exist when this script first runs.
     enter_send_js = """
 () => {
   const wire = () => {
@@ -1514,9 +1514,9 @@ def create_ui() -> gr.Blocks:
         js=enter_send_js,
     ) as app:
 
-
-
-
+        # ------------------------------------------------------------------
+        # TOP BAR
+        # ------------------------------------------------------------------
         gr.HTML(
             '<div class="sp-topbar">'
             f'{_brand_block_html()}'
@@ -1529,16 +1529,16 @@ def create_ui() -> gr.Blocks:
 
         with gr.Tabs(elem_classes=["sp-tabs"]) as tabs_root:
 
-
-
-
+            # ==================================================================
+            # TAB 1 — RESEARCH WORKSPACE
+            # ==================================================================
             with gr.Tab("Workspace", id="workspace"):
                 with gr.Row(elem_classes=["sp-workspace"], equal_height=False):
-
+                    # ------ LEFT SIDEBAR -------------------------------------
                     with gr.Column(scale=2, min_width=240, elem_classes=["sp-rail-left"]):
-
-
-
+                        # Projects section: header + empty-state + N buttons + more-footer.
+                        # Each button is a real gr.Button so a click can route to the
+                        # Archive tab via existing ``view_trajectory`` / ``export_traj_json``.
                         _hdr0, _empty0, _btn_updates0, _states0, _more0 = _projects_rail_state()
                         projects_header_html = gr.HTML(_hdr0)
                         projects_empty_html = gr.HTML(_empty0)
@@ -1561,7 +1561,7 @@ def create_ui() -> gr.Blocks:
                         queue_html = gr.HTML(_task_queue_html("idle", 0, initial_settings.max_steps, ""))
                         refresh_rail_btn = gr.Button("Refresh Sidebar", size="sm")
 
-
+                    # ------ MAIN WORKSPACE -----------------------------------
                     with gr.Column(scale=8, min_width=560, elem_classes=["sp-main"]):
                         gr.HTML(
                             '<div class="workspace-heading">'
@@ -1589,10 +1589,10 @@ def create_ui() -> gr.Blocks:
                             group_consecutive_messages=False,
                         )
 
-
-
-
-
+                        # Command input — drag-drop attach zone above, then
+                        # textarea + actions row. ``gr.Files`` doubles as a
+                        # native drop target AND shows uploaded filenames as
+                        # chips inline — no hidden accordion to click into.
                         with gr.Group(elem_classes=["sp-command-shell"]):
                             attach_btn = gr.Files(
                                 label="拖拽或点击此处上传 PDF / 图片 / Markdown / 文本（PDF·图片自动走 PaddleOCR-VL）",
@@ -1644,15 +1644,15 @@ def create_ui() -> gr.Blocks:
                                             elem_id="chat-send-btn",
                                         )
 
-
+                        # Hidden bridge between quick-inject and main_stream.
                         chat_stash = gr.State("")
 
-
-
-
+                        # ``gr.Files`` already shows file chips inline, so the
+                        # old "Attached files" accordion + status message are
+                        # redundant — we skip them.
                         attach_status = gr.Markdown(visible=False)
 
-
+                    # ------ RIGHT CONTEXT PANEL ------------------------------
                     with gr.Column(scale=4, min_width=320, elem_classes=["sp-rail-right"]):
                         with gr.Tabs():
                             with gr.Tab("Pipeline"):
@@ -1731,14 +1731,14 @@ def create_ui() -> gr.Blocks:
                                             visible=initial_pdf_path is not None,
                                         )
 
-
-
-
-
-
-
-
-
+                                    # Full bundle (zip): LaTeX source +
+                                    # experiment code + charts + logs +
+                                    # literature cache + everything the
+                                    # agent produced. Always-visible
+                                    # button — handler builds the zip on
+                                    # demand and returns the path; if
+                                    # nothing exists yet it stays
+                                    # disabled / hidden.
                                     gr.HTML(
                                         '<div class="card-heading bundle-heading">'
                                         '<h3>Full Run Bundle</h3>'
@@ -1755,9 +1755,9 @@ def create_ui() -> gr.Blocks:
                                         '<div class="empty-state">研究完成后再点击 Export PDF 即可。</div>'
                                     )
 
-
-
-
+            # ==================================================================
+            # TAB 2 — CONFIGURATION
+            # ==================================================================
             with gr.Tab("Configuration", id="configuration"):
                 with gr.Row():
                     with gr.Column(scale=6, min_width=520):
@@ -1845,8 +1845,8 @@ def create_ui() -> gr.Blocks:
                             gr.HTML(
                                 '<div class="card-heading">'
                                 '<h3>Literature Search</h3>'
-                                '<p>使用 arXiv 公开搜索；配额限定每次研究的搜索次数，'
-                                '避免反复消耗模型上下文。</p>'
+                                '<p>使用 arXiv 免费搜索；配额限定每次研究的搜索次数，'
+                                '避免 Agent 反复触发搜索调用。</p>'
                                 '</div>'
                             )
                             search_quota = gr.Slider(
@@ -1914,9 +1914,9 @@ def create_ui() -> gr.Blocks:
                             )
                             settings_summary = gr.HTML(initial_summary_html)
 
-
-
-
+            # ==================================================================
+            # TAB 3 — ARCHIVE (only when SHOW_HISTORY_TAB)
+            # ==================================================================
             traj_select = traj_view = traj_json_view = refresh_btn = None
             if SHOW_HISTORY_TAB:
                 with gr.Tab("Archive", id="archive"):
@@ -1957,13 +1957,13 @@ def create_ui() -> gr.Blocks:
             '</div>'
         )
 
+        # ------------------------------------------------------------------
+        # WIRING — every interactive element in the UI must call into the
+        # canonical backend handler. The wrappers above only fan out
+        # additional UI-only outputs that derive from already-public state.
+        # ------------------------------------------------------------------
 
-
-
-
-
-
-
+        # --- Configuration: presets, save/load/reset/test ----------------
         agent_preset.change(
             fn=apply_agent_preset,
             inputs=[agent_preset, agent_model, agent_base_url],
@@ -2007,7 +2007,7 @@ def create_ui() -> gr.Blocks:
             outputs=[connection_status],
         )
 
-
+        # Auto-save on change so users don't have to hit save manually.
         autosave_components = [
             agent_model, agent_base_url, agent_api_key,
             reviewer_enabled, reviewer_model, reviewer_base_url, reviewer_api_key,
@@ -2024,7 +2024,7 @@ def create_ui() -> gr.Blocks:
                 queue=False,
             )
 
-
+        # --- Workspace: chat run -----------------------------------------
         stream_inputs = [
             chat_stash,
             chat_panel,
@@ -2036,7 +2036,7 @@ def create_ui() -> gr.Blocks:
             attach_btn,
             run_mode,
         ]
-
+        # Sidebar fan-out: queue, papers, projects header/empty/N buttons/N states/more.
         sidebar_outputs = [
             queue_html, papers_html,
             projects_header_html, projects_empty_html,
@@ -2090,13 +2090,13 @@ def create_ui() -> gr.Blocks:
             queue=False,
         )
 
+        # ``gr.Files`` is its own drop target and renders chips for every
+        # uploaded file inline — no extra status surface needed. The file
+        # list is read straight off ``attach_btn`` when the user hits Send
+        # (it's part of ``stream_inputs`` and gets staged into the sandbox
+        # by ``_stage_attachments_into_sandbox`` in ``lab_forge.web``).
 
-
-
-
-
-
-
+        # --- Paper export -------------------------------------------------
         paper_artifact_outputs = [
             report_artifact_row, report_artifact, report_download,
             bundle_artifact_row, bundle_artifact, bundle_download,
@@ -2120,14 +2120,14 @@ def create_ui() -> gr.Blocks:
             outputs=[full_bundle_download],
         )
 
-
+        # --- Archive tab --------------------------------------------------
         if SHOW_HISTORY_TAB and refresh_btn is not None:
             refresh_btn.click(fn=load_trajectory_list, outputs=[traj_select])
             traj_select.change(fn=view_trajectory, inputs=[traj_select], outputs=[traj_view])
             traj_select.change(fn=export_traj_json, inputs=[traj_select], outputs=[traj_json_view])
 
-
-
+            # Rail project buttons jump to the Archive tab and surface the
+            # picked trajectory using the same backend handlers as the dropdown.
             for btn, state in zip(project_btns, project_states):
                 btn.click(
                     fn=open_project_in_archive,

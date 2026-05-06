@@ -1,8 +1,15 @@
-
+# LabForge Configuration (LangChain Edition)
+# Default: MiniMax-M2.7 agent + ERNIE 4.5 Turbo reviewer
+#
+# 主模型和评审模型来自不同厂商，base_url 和 api_key 各自独立。
+# API Key 优先从对应字段读取，其次从环境变量自动匹配：
+#   - MiniMax:  minimax_API_KEY / MINIMAX_API_KEY
+#   - 星河社区: AI_STUDIO_API_KEY
+#   - 通用:     API_KEY
 
 agent_model:
   model: "MiniMax-M2.7"
-  api_key: ""
+  api_key: ""                # 或设置环境变量 minimax_API_KEY / MINIMAX_API_KEY
   base_url: "https://api.minimaxi.com/v1"
   temperature: 0.0
   max_tokens: 8192
@@ -11,10 +18,17 @@ agent_model:
 reviewer:
   enabled: true
   model:
-
-
+    # 默认走星河社区 DeepSeek-V3：和 agent 主模型同一个 AI Studio 套餐，
+    # 付费等级允许 deepseek-v3 → reviewer 也一定能跑，不会出现 401 /
+    # invalid_model。
+    #
+    # 老的 ernie-3.5-8k / ernie-speed-* / ernie-lite-* 在 2026 年已经从
+    # AI Studio 默认开放清单撤下，写在配置里的话新账户会直接 invalid_model。
+    # 如果你想换更便宜或更快的模型，可在 UI / 这里改成 ernie-4.5-turbo-128k-preview、
+    # ernie-x1-turbo-32k、qwen3-coder-30b-a3b-instruct、kimi-k2-instruct 等
+    # 现役模型，它们和 deepseek-v3 走同一份套餐。
     model: "deepseek-v3"
-    api_key: ""
+    api_key: ""              # 或设置环境变量 AI_STUDIO_API_KEY
     base_url: "https://aistudio.baidu.com/llm/lmapi/v3"
     temperature: 0.0
     max_tokens: 2048
@@ -23,15 +37,21 @@ reviewer:
     - before_report
 
 sandbox:
-  backend: "subprocess"
+  backend: "subprocess"      # "subprocess" or "docker"
   timeout: 300
   max_output_length: 10000
   working_dir: "/tmp/lab_forge_workspace"
-
-
+  # Leave ``python_executable`` empty to auto-detect: the sandbox will use the
+  # interpreter that runs lab_forge (typically your venv / conda env), so
+  # ``pip install -r requirements.txt`` is enough to make execute_code work.
+  # Override ONLY if you want code to run under a different env (e.g. one with
+  # heavy domain packages like rdkit / deepchem already pre-installed).
   python_executable: ""
 
-
+# 0 = adaptive step budget. LabForge infers a soft budget from task complexity,
+# extends it while the run is still making progress, and always keeps a finite
+# hard cap to prevent infinite loops. Set a positive value to choose the
+# initial soft budget manually.
 max_steps: 0
 record_trajectory: true
 trajectory_dir: "./trajectories"

@@ -73,8 +73,8 @@ class ToolRegistry:
         if tool is None:
             return ToolResult(output=f"Error: Unknown tool '{name}'", success=False)
 
-
-
+        # If the LLM returned unparseable JSON, __raw_arguments is set.
+        # Try to recover by extracting known parameter names from the raw string.
         if "__raw_arguments" in arguments:
             raw = arguments["__raw_arguments"]
             recovered = self._recover_arguments(tool, raw)
@@ -97,14 +97,14 @@ class ToolRegistry:
     @staticmethod
     def _recover_arguments(tool: "Tool", raw: str) -> dict | None:
         """Best-effort recovery of tool arguments from a raw string."""
-        import json, re
+        import json, re  # noqa: E401
         if not isinstance(raw, str):
             return None
-
+        # Try to find a JSON object anywhere in the string
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             candidate = match.group(0)
-
+            # Remove trailing commas
             candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
             try:
                 parsed = json.loads(candidate)
@@ -112,8 +112,8 @@ class ToolRegistry:
                     return parsed
             except (json.JSONDecodeError, TypeError):
                 pass
-
-
+        # For single-parameter tools like execute_code(code=...), treat the
+        # whole raw string as the parameter value.
         schema = tool.parameters
         required = schema.get("required", [])
         if len(required) == 1:

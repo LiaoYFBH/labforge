@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SANDBOX_ROOT = Path("/tmp/lab_forge_workspace")
 
-
-
-
+# A single execute_code call is hard-capped at 300 s by the sandbox. The agent
+# should plan well below that ceiling so a transient slowdown doesn't cost a
+# whole turn. These targets are referenced inside the machine-profile prompt.
 EXECUTE_CODE_TARGET_SECONDS = 60
 EXECUTE_CODE_TIMEOUT_SECONDS = 300
 
@@ -47,15 +47,15 @@ def detect_machine_profile() -> dict[str, Any]:
         pass
 
     try:
-        import psutil
+        import psutil  # type: ignore
         profile["cpu_physical"] = psutil.cpu_count(logical=False) or profile["cpu_logical"]
         profile["ram_gb"] = round(psutil.virtual_memory().total / (1024 ** 3), 1)
     except Exception:
-
+        # psutil missing or call failed — leave physical core / RAM as None.
         pass
 
-
-
+    # GPU detection via nvidia-smi. Quick timeout because if it's missing we
+    # don't want to block run startup.
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
@@ -168,7 +168,7 @@ def format_machine_profile_for_prompt(profile: dict[str, Any]) -> str:
     )
     return "\n".join(lines)
 
-
+# File categories used when summarising a run workspace for the user.
 _CODE_EXTS = {".py", ".sh", ".ipynb"}
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".svg", ".gif", ".bmp", ".tiff"}
 _DATA_EXTS = {
@@ -179,22 +179,22 @@ _REPORT_EXTS = {".md", ".txt", ".pdf", ".tex", ".bib", ".rst"}
 _LOG_EXTS = {".log"}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# ---------------------------------------------------------------------------
+# Topic mode
+# ---------------------------------------------------------------------------
+#
+# LabForge is a *lightweight* research agent: it can run smoke-scale
+# experiments and produce literature surveys, but it cannot actually invent
+# a new algorithm or train a serious model end-to-end. The mode is now
+# always picked explicitly by the user (UI radio / CLI ``--mode``):
+#   - "survey":     no experiments. Just literature search → fulltext reads
+#                   → generate_report.
+#   - "experiment": the 5-phase loop with code execution.
+#
+# There is intentionally no auto-classifier; previous keyword-driven routing
+# misfired on common phrasings ("做实验分析参数的作用" was misclassified as
+# survey because the keyword list omitted "实验"). Forcing the user to
+# choose keeps the contract honest.
 
 
 def _build_experiment_task_desc(topic: str, detail: str) -> str:
@@ -310,7 +310,7 @@ def topic_to_task(
             "Install any missing packages when needed. Pick dataset size based on the "
             "EXECUTION ENVIRONMENT block in the task description above."
         )
-    else:
+    else:  # survey
         expected_output = (
             "A literature survey delivered as research_report.md, citing ≥5 verified "
             "references actually opened during this run, with clear separation of "

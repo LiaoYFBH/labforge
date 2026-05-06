@@ -1,9 +1,13 @@
-\documentclass[((( class_font_size ))),((( page_size ))),twocolumn]{article}
+% ICML-style two-column template (self-contained, no external .sty needed).
+% Approximates the ICML look using standard TexLive packages — Times font,
+% two-column layout, narrow margins. For pixel-perfect ICML formatting,
+% drop the official `icml2024.sty` next to the rendered .tex manually.
+\documentclass[10pt,twocolumn]{article}
 
 ((* if has_cjk *))
 \usepackage[UTF8,fontset=fandol]{ctex}
 ((* endif *))
-\usepackage[((( page_size ))),margin=20mm]{geometry}
+\usepackage[a4paper,margin=20mm]{geometry}
 \usepackage{times}
 \usepackage{microtype}
 \usepackage{graphicx}
@@ -16,7 +20,6 @@
 \usepackage{float}
 \usepackage{xcolor}
 \usepackage{enumitem}
-\usepackage{setspace}
 
 \hypersetup{
     colorlinks=true,
@@ -27,8 +30,6 @@
 \sloppy
 \emergencystretch=2em
 \allowdisplaybreaks
-\setstretch{((( line_spacing )))}
-\AtBeginDocument{\fontsize{((( body_font_size )))}{((( body_baseline_skip )))}\selectfont}
 
 \title{((( title )))}
 
@@ -40,10 +41,6 @@
 \date{}
 
 \begin{document}
-((* if not include_page_numbers *))
-\pagestyle{empty}
-\pagenumbering{gobble}
-((* endif *))
 \twocolumn[
   \begin{@twocolumnfalse}
     \maketitle

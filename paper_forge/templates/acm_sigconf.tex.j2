@@ -1,26 +1,21 @@
-\PassOptionsToPackage{((( page_size )))}{geometry}
-\documentclass[sigconf,((( class_font_size )))]{acmart}
+% ACM SIGCONF (KDD / WWW / SIGIR / CIKM 等)
+\documentclass[sigconf]{acmart}
 
 \setcopyright{none}
-((* if include_page_numbers *))
 \settopmatter{printacmref=false, printccs=false, printfolios=true}
-((* else *))
-\settopmatter{printacmref=false, printccs=false, printfolios=false}
-((* endif *))
 \acmConference[]{}{}{}
 
 ((* if has_cjk *))
 \usepackage[UTF8,fontset=fandol]{ctex}
 ((* endif *))
+% acmart.cls already loads graphicx + amsmath + amssymb + booktabs + xcolor;
+% only add the few extras we actually need on top.
 \usepackage{longtable}
 \usepackage{caption}
 \usepackage{float}
-\usepackage{setspace}
 \sloppy
 \emergencystretch=2em
 \allowdisplaybreaks
-\setstretch{((( line_spacing )))}
-\AtBeginDocument{\fontsize{((( body_font_size )))}{((( body_baseline_skip )))}\selectfont}
 
 \title{((( title )))}
 
@@ -32,10 +27,6 @@
 ((* endif *))
 
 \begin{document}
-((* if not include_page_numbers *))
-\pagestyle{empty}
-\pagenumbering{gobble}
-((* endif *))
 
 ((* if abstract *))
 \begin{abstract}

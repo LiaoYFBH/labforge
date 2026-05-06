@@ -16,17 +16,17 @@ from typing import Any
 
 
 IGNORED_BUDGET_ACTIONS = {
-
-
+    # Reviewer / human / system steps are not "agent work" and should not
+    # eat the adaptive budget.
     "reviewer_review",
     "human_feedback",
     "human_abort",
     "human_review",
     "runtime_error",
-
-
-
-
+    # Quality-gate steps: the agent tried to submit / move on, but a gate
+    # (checklist, narration spiral) intercepted it. Charging the agent for
+    # being intercepted would make every gate hit shrink the runway it
+    # has to actually fix the gap, which is the opposite of what we want.
     "checklist_block",
     "narration_spiral_abort",
 }
@@ -197,8 +197,8 @@ class AdaptiveStepBudget:
             hard_cap = min(absolute_cap, max(120, math.ceil(initial * 1.8)))
             adaptive = True
         elif requested <= 20:
-
-
+            # Tiny values are usually tests or deliberate smoke runs. Respect
+            # them strictly so short-run callers do not unexpectedly expand.
             initial = requested
             hard_cap = requested
             adaptive = False

@@ -1,9 +1,9 @@
-\documentclass[((( class_font_size ))),((( page_size )))]{article}
+\documentclass[11pt,a4paper]{article}
 
 ((* if has_cjk *))
 \usepackage[UTF8,fontset=fandol]{ctex}
 ((* endif *))
-\usepackage[((( page_size ))),margin=((( margin_mm )))mm]{geometry}
+\usepackage[a4paper,margin=((( margin_mm )))mm]{geometry}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{array}
@@ -24,7 +24,6 @@
 }
 
 \setstretch{((( line_spacing )))}
-\AtBeginDocument{\fontsize{((( body_font_size )))}{((( body_baseline_skip )))}\selectfont}
 \setlength{\parindent}{1.5em}
 \setlength{\parskip}{0.5ex}
 \sloppy
@@ -41,10 +40,6 @@
 \date{}
 
 \begin{document}
-((* if not include_page_numbers *))
-\pagestyle{empty}
-\pagenumbering{gobble}
-((* endif *))
 \maketitle
 
 ((* if abstract *))

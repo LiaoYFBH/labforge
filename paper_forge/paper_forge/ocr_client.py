@@ -14,8 +14,8 @@ from .config import OCRConfig
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {
-    ".pdf": 0,
-    ".png": 1,
+    ".pdf": 0,   # fileType 0 = PDF
+    ".png": 1,   # fileType 1 = image
     ".jpg": 1,
     ".jpeg": 1,
     ".bmp": 1,
@@ -83,7 +83,7 @@ def parse_document(file_path: str | Path, config: OCRConfig) -> OCRResult:
         if md_text:
             all_markdown.append(md_text)
 
-
+        # Download/decode images referenced in this page
         images_dict = md_section.get("images", {})
         for img_name, img_src in images_dict.items():
             try:
@@ -123,7 +123,7 @@ def parse_multiple_documents(
                 combined_markdown.append(
                     f"<!-- Document: {fp.name} -->\n{result.markdown_text}"
                 )
-
+            # Prefix image names with doc index to avoid collision
             for img_name, img_data in result.images.items():
                 unique_name = f"doc{idx}_{img_name}"
                 combined_images[unique_name] = img_data

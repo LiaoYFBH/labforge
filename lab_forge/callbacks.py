@@ -31,7 +31,7 @@ class PhaseTracker:
         self.tool_counts: dict[str, int] = {}
         self.step_count: int = 0
         self.consecutive_failures: int = 0
-
+        # Literature tracking
         self.literature_attempts: int = 0
         self.literature_failures: int = 0
         self.literature_successes: int = 0
@@ -72,16 +72,16 @@ class PhaseTracker:
         impl = self.implementation_count
         step = self.step_count
 
-
+        # Error recovery after 3 consecutive failures
         if self.consecutive_failures >= 3:
             self.consecutive_failures = 0
             return ERROR_RECOVERY_PROMPT
 
-
+        # After 2+ successful literature searches and no implementation → plan
         if lit_success >= 2 and impl == 0 and step >= 3:
             return PHASE_HINTS["literature_to_planning"]
 
-
+        # Partial literature → plan
         if (
             lit_success >= 1
             and self.literature_attempts >= 2
@@ -91,7 +91,7 @@ class PhaseTracker:
         ):
             return PHASE_HINTS["literature_partial_to_planning"]
 
-
+        # All literature searches failed
         if (
             lit_success == 0
             and self.literature_attempts >= 2
@@ -100,11 +100,11 @@ class PhaseTracker:
         ):
             return PHASE_HINTS["literature_search_failed"]
 
-
+        # After enough implementation → analysis/report
         if impl >= 5 and step >= int(self.max_steps * 0.5):
             return PHASE_HINTS["analysis_to_report"]
 
-
+        # Near the end → wrap up
         if step == int(self.max_steps * 0.8):
             return (
                 "You are running low on steps. Please wrap up your work:\n"
@@ -143,10 +143,10 @@ class ReviewerCallback:
         self.step_callback = step_callback
         self.checkpoints = set(checkpoints or ["after_literature", "before_report"])
 
-
+        # State tracking
         self._literature_evidence: list[str] = []
-
-
+        # Backward-compatible alias for older tests/extensions that still
+        # inspect the previous name directly.
         self._search_results = self._literature_evidence
         self._code_outputs: list[str] = []
         self._tool_history_lines: list[str] = []
@@ -155,15 +155,15 @@ class ReviewerCallback:
         self._literature_reviewed: bool = False
         self._experiment_reviewed: bool = False
 
-
+        # Pending feedback to inject into the next round's HumanMessage.
         self.pending_feedback: str | None = None
-
-
-
+        # True whenever the most recent review failed — the agent loop uses
+        # this to refuse an early submit-break so the reviewer's correction
+        # actually reaches the main model before the run terminates.
         self.last_review_failed: bool = False
-
-
-
+        # Count *consecutive* infrastructure failures (e.g. 401 invalid_model,
+        # network timeout). After ``MAX_INFRA_FAILURES`` we stop blocking the
+        # agent so a permanently broken reviewer cannot freeze the run forever.
         self._consecutive_infra_failures: int = 0
         self._infra_disabled: bool = False
         self._MAX_INFRA_FAILURES = 3
@@ -172,8 +172,8 @@ class ReviewerCallback:
         """Track tool outputs and trigger reviews at checkpoints."""
         tool_name = kwargs.get("name", "")
 
-
-
+        # Track history. Literature evidence can include title/URL/manifest
+        # details that are needed by the reviewer, so preserve a little more.
         history_limit = (
             600 if tool_name in ("search_literature", "read_paper_fulltext") else 200
         )
@@ -219,9 +219,9 @@ class ReviewerCallback:
             if "before_submit" in self.checkpoints:
                 self._run_submission_review(output)
 
-
-
-
+    # ------------------------------------------------------------------
+    # Individual review runners
+    # ------------------------------------------------------------------
     def _run_literature_review(self) -> None:
         agent_summary = "\n".join(self._tool_history_lines[-5:])
         self._emit_thinking_card("文献评审")
@@ -257,9 +257,9 @@ class ReviewerCallback:
         )
         self._handle_review_result("最终评审", result)
 
-
-
-
+    # ------------------------------------------------------------------
+    # Emitters
+    # ------------------------------------------------------------------
     def _emit_thinking_card(self, checkpoint: str) -> None:
         """Emit a lightweight 'reviewer is working' card before the LLM call.
 
@@ -289,8 +289,8 @@ class ReviewerCallback:
             getattr(result, "error", False),
         )
 
-
-
+        # Track consecutive infrastructure failures so a permanently broken
+        # reviewer (e.g. wrong model name → 401) doesn't lock the run.
         if getattr(result, "error", False):
             self._consecutive_infra_failures += 1
             if self._consecutive_infra_failures >= self._MAX_INFRA_FAILURES and not self._infra_disabled:
@@ -316,16 +316,16 @@ class ReviewerCallback:
                 f"Suggestion: {suggestion}\n"
                 f"Please fix the above issues before proceeding."
             )
-
-
-
-
+            # Only block the submit when this is a *content* rejection — or
+            # while we still have retry budget for infrastructure errors. Once
+            # infra failures exceed the threshold we surface the feedback but
+            # stop blocking so the agent can still produce a final result.
             self.pending_feedback = feedback
             self.last_review_failed = not self._infra_disabled
         else:
             self.last_review_failed = False
 
-
+        # Build the user-visible observation for the review card.
         status_emoji = "✅" if result.passed else "⚠️"
         body_lines = [
             f"{status_emoji} {checkpoint_name} · Score {result.score:.2f}/1.0 "

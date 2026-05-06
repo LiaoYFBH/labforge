@@ -2,7 +2,7 @@
 Main entry point and CLI for LabForge (auto mode only).
 
 The CLI runs the agent end-to-end on a single task. The Gradio Studio
-(``ui.py``) is the other supported entry point. Interactive terminal
+(``ui-new.py``) is the other supported entry point. Interactive terminal
 mode and benchmark evaluation have been removed to keep the surface small.
 
 Usage:

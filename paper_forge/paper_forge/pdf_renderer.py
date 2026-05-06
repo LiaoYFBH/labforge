@@ -24,20 +24,20 @@ from .utils import get_paper_labels
 logger = logging.getLogger(__name__)
 MAX_RENDERED_TABLES_PER_SECTION = 4
 
-
+# Common font search paths
 FONT_SEARCH_PATHS = [
-
+    # Linux system fonts
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"),
-
+    # WenQuanYi CJK
     Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
     Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-
+    # Noto CJK
     Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
     Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"),
-
+    # Bundled fonts
     Path(__file__).parent.parent / "fonts",
 ]
 
@@ -76,7 +76,7 @@ class AcademicPaperPDF(FPDF):
         if self._fonts_loaded:
             return
 
-
+        # Try to find a CJK-capable font
         cjk_font = _find_font(["wqy", "notosans-cjk", "notosanscjk", "notoserif"])
         if cjk_font:
             try:
@@ -89,7 +89,7 @@ class AcademicPaperPDF(FPDF):
             except Exception as e:
                 logger.warning("Failed to load CJK font %s: %s", cjk_font, e)
 
-
+        # Try DejaVu for better Unicode coverage (if no CJK found)
         if not self._has_cjk:
             dejavu = _find_font(["dejavusans", "dejavu"])
             dejavu_bold = _find_font(["dejavusans-bold", "dejavu"])
@@ -164,13 +164,13 @@ def render_paper(
     body_font = pdf._body_font
     line_h = style.font_size_body * 0.5 * style.line_spacing
 
-
+    # ── Title ──
     pdf.set_font(body_font, "B", style.font_size_title)
     pdf.multi_cell(0, style.font_size_title * 0.6, title, align="C",
                    new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(4)
 
-
+    # ── Authors ──
     authors = paper.get("authors", [])
     if authors:
         pdf.set_font(body_font, "", style.font_size_body + 1)
@@ -179,7 +179,7 @@ def render_paper(
                        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(4)
 
-
+    # ── Abstract ──
     abstract = paper.get("abstract", "")
     if abstract:
         pdf.ln(2)
@@ -187,7 +187,7 @@ def render_paper(
         pdf.cell(0, line_h, labels["abstract"], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(1)
 
-
+        # Indent abstract
         old_l = pdf.l_margin
         old_r = pdf.r_margin
         pdf.set_left_margin(old_l + 10)
@@ -200,7 +200,7 @@ def render_paper(
         pdf.set_right_margin(old_r)
         pdf.ln(2)
 
-
+    # ── Keywords ──
     keywords = paper.get("keywords", [])
     if keywords:
         pdf.set_font(body_font, "B", style.font_size_body - 1)
@@ -212,11 +212,11 @@ def render_paper(
                        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(4)
 
-
+    # ── Divider ──
     _draw_divider(pdf, margin)
     pdf.ln(4)
 
-
+    # ── Sections ──
     figure_counter = 0
     table_counter = 0
 
@@ -227,7 +227,7 @@ def render_paper(
         figures = section.get("figures", [])
         tables = section.get("tables", [])
 
-
+        # Section heading
         if heading:
             if level == 1:
                 pdf.ln(4)
@@ -242,7 +242,7 @@ def render_paper(
                                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.ln(1)
 
-
+        # Paragraphs
         for para in paragraphs:
             if not para or not para.strip():
                 continue
@@ -257,7 +257,7 @@ def render_paper(
                 labels=labels,
             )
 
-
+        # Figures
         for fig in figures:
             figure_counter += 1
             filename = fig.get("filename", "")
@@ -267,7 +267,7 @@ def render_paper(
             if img_data:
                 _render_figure(pdf, img_data, caption, figure_counter, style, margin, labels)
             else:
-
+                # Image not available, render placeholder
                 pdf.ln(2)
                 pdf.set_font(body_font, "", style.font_size_body - 1)
                 placeholder = (
@@ -279,7 +279,7 @@ def render_paper(
                                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.ln(2)
 
-
+        # Tables
         for tbl in tables[:MAX_RENDERED_TABLES_PER_SECTION]:
             table_counter += 1
             _render_table(pdf, tbl, table_counter, style, body_font, line_h, margin, labels)
@@ -298,7 +298,7 @@ def render_paper(
             pdf.set_text_color(0, 0, 0)
             pdf.ln(2)
 
-
+    # ── References ──
     references = paper.get("references", [])
     if references:
         pdf.ln(4)
@@ -322,7 +322,7 @@ def render_paper(
                 )
                 pdf.ln(0.5)
 
-
+    # Save
     pdf.output(str(output_path))
     logger.info("PDF saved to %s", output_path)
     return output_path
@@ -348,31 +348,31 @@ def _render_figure(
     """Render a figure with caption into the PDF."""
     pdf.ln(3)
 
-
+    # Write image to temp file for fpdf2
     try:
         suffix = _guess_image_suffix(img_data)
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(img_data)
             tmp_path = tmp.name
 
-
+        # Calculate available width and max height
         avail_w = pdf.w - 2 * margin
-        max_img_w = avail_w * 0.8
-        max_img_h = 120
+        max_img_w = avail_w * 0.8  # 80% of text width
+        max_img_h = 120  # mm
 
-
+        # Check if we need a new page
         if pdf.get_y() + max_img_h + 20 > pdf.h - margin:
             pdf.add_page()
 
-
+        # Center the image
         pdf.image(
             tmp_path,
             x=(pdf.w - max_img_w) / 2,
             w=max_img_w,
-            h=0,
+            h=0,  # Auto height
         )
 
-
+        # Clean up temp file
         Path(tmp_path).unlink(missing_ok=True)
 
     except Exception as e:
@@ -381,7 +381,7 @@ def _render_figure(
         pdf.cell(0, 5, f"[{labels['figure']} {fig_num}: {labels['image_render_failed']}]", align="C",
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-
+    # Caption
     pdf.ln(2)
     pdf.set_font(pdf._body_font, "", style.font_size_body - 1)
     caption = caption.strip()
@@ -577,7 +577,7 @@ def _strip_inline_markdown(text: str) -> str:
     value = re.sub(r"\s+", " ", value)
     return value.strip()
 
-
+    # Table caption (above table)
     pdf.set_font(body_font, "B", style.font_size_body - 1)
     caption_text = (
         f"{labels['table']} {tbl_num}. {caption}"
@@ -757,4 +757,4 @@ def _guess_image_suffix(data: bytes) -> str:
         return ".gif"
     if data[:4] == b'BM':
         return ".bmp"
-    return ".png"
+    return ".png"  # default
