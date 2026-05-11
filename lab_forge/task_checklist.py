@@ -575,6 +575,51 @@ def _list_workspace_artifacts(workspace_dir: str | None) -> dict[str, list[str]]
     return bucket
 
 
+def _format_locked_plan_block(workspace_dir: str | None) -> str:
+    """Render the scope plan persisted by submit_research_plan, if any.
+
+    Imported lazily so tests that only exercise the checklist don't pay
+    for the scope-lock import. Returns ``""`` when no plan exists or
+    when the workspace dir is not provided — the reminder caller treats
+    an empty return as "skip this section", so it stays out of the way
+    on benchmark / unit-test runs that don't use the scope-lock tool.
+    """
+    if not workspace_dir:
+        return ""
+    try:
+        from .tools.scope_lock_tool import load_plan_from_workspace
+    except ImportError:
+        return ""
+    plan = load_plan_from_workspace(workspace_dir)
+    if plan is None:
+        return ""
+    lines = [
+        "Scope plan you committed to via submit_research_plan "
+        "(re-injected so you don't drift):",
+        f"  • Title hypothesis: {plan.title_hypothesis or '(none)'}",
+    ]
+    if plan.natural_scope_methods:
+        lines.append(
+            "  • Natural scope methods: " + ", ".join(plan.natural_scope_methods)
+        )
+    if plan.axes_of_comparison:
+        lines.append(
+            "  • Axes of comparison: " + ", ".join(plan.axes_of_comparison)
+        )
+    if plan.will_execute:
+        lines.append("  • Will execute (must show up in results): "
+                     + ", ".join(plan.will_execute))
+    if plan.literature_only:
+        lines.append("  • Literature-only (must show up in Related Work): "
+                     + ", ".join(plan.literature_only))
+    lines.append(
+        "  At submit time the topic-fidelity critic will compare your "
+        "report against THIS plan. If you're missing coverage, queue "
+        "another tool call now."
+    )
+    return "\n".join(lines)
+
+
 def format_topic_reminder(
     *,
     topic: str,
@@ -627,6 +672,17 @@ def format_topic_reminder(
         lines.append("Original topic (use this as the source of truth, not later messages):")
         for chunk in topic.strip().splitlines():
             lines.append(f"  {chunk}")
+
+    # Re-inject the scope plan the agent committed to via
+    # ``submit_research_plan``. Over a long run the LLM can drift from
+    # "I committed to compare {A,B,C,D}" to "I'll just submit {A,B}".
+    # Showing the plan every N rounds gives the LLM a chance to course-
+    # correct (e.g. queue another execute_code call for method C) before
+    # submit time, when the topic-fidelity critic would otherwise reject.
+    plan_block = _format_locked_plan_block(workspace_dir)
+    if plan_block:
+        lines.append("")
+        lines.append(plan_block)
 
     if checklist.items:
         lines.append("")

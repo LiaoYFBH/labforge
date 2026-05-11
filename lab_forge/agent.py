@@ -547,7 +547,44 @@ class ResearchAgent:
         # expansion automatically. The agent only sees a single tool call;
         # the multi-LLM-call expansion happens inside the tool.
         self.submit_tool = SubmitResultTool()
-        self.tools, self.submit_tool = create_all_tools(
+        # Build the topic-fidelity critic. It runs at generate_report submit
+        # time to compare the report against the locked scope plan.
+        # Reuses the reviewer LLM when available so we don't pay for an
+        # extra model; falls back to the agent LLM otherwise. Returns None
+        # if neither is available, in which case the critic becomes a no-op
+        # — the run still proceeds, just without the extra fidelity gate.
+        from .topic_fidelity import build_topic_fidelity_critic
+
+        fidelity_critic = build_topic_fidelity_critic(
+            llm=(
+                self.reviewer.llm
+                if (self.reviewer is not None and getattr(self.reviewer, "llm", None) is not None)
+                else self.agent_llm
+            ),
+        )
+        # Outcome judge — same fallback pattern as the fidelity critic.
+        # Prefer the reviewer LLM (it's the "second opinion" model) so
+        # the agent's main LLM doesn't grade its own work; fall back to
+        # the agent LLM when no reviewer is configured.
+        outcome_judge_llm = (
+            self.reviewer.llm
+            if (self.reviewer is not None and getattr(self.reviewer, "llm", None) is not None)
+            else self.agent_llm
+        )
+        # Vision LLM is opt-in. The default deepseek-v3 deployment is
+        # text-only, so we leave this None unless explicitly configured.
+        # When None the vision figure-semantics gate skips silently and
+        # the existing blank-figure pixel check remains the primary
+        # figure guardrail.
+        vision_llm = getattr(config, "vision_llm_model", None)
+        if vision_llm is not None:
+            try:
+                vision_llm = create_chat_model(vision_llm)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to instantiate vision LLM; vision figure check disabled: %s", exc)
+                vision_llm = None
+
+        self.tools, self.submit_tool, self.scope_lock = create_all_tools(
             sandbox=self.sandbox,
             working_dir=config.sandbox.working_dir,
             ocr_enabled=config.ocr_enabled,
@@ -555,6 +592,9 @@ class ResearchAgent:
             tool_names=tool_names,
             writer_llm=self.agent_llm,
             search_quota=int(getattr(config, "search_quota", 0) or 0),
+            fidelity_critic=fidelity_critic,
+            outcome_judge_llm=outcome_judge_llm,
+            vision_llm=vision_llm,
         )
 
         # Build the LangGraph react agent with MemorySaver for state persistence
@@ -894,6 +934,7 @@ class ResearchAgent:
                 trajectory=trajectory,
                 step_callback=step_callback,
                 checkpoints=self.config.reviewer.checkpoints,
+                workspace_dir=self.config.sandbox.working_dir,
             )
 
         # Each run gets a unique thread so MemorySaver doesn't mix tasks.

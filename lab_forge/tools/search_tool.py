@@ -46,6 +46,22 @@ _RETRYABLE_EXCEPTIONS = (
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 DEFAULT_MAX_ATTEMPTS = 4
+# After this many consecutive failed search calls (across different queries),
+# escalate the error message to instruct the agent to stop searching and
+# document the limitation. Picked at 3 so a transient blip doesn't trigger
+# the escalation, but a sustained outage / arXiv throttling event ends the
+# search loop quickly instead of burning the whole quota on retries.
+_CONSECUTIVE_FAILURE_ESCALATION = 3
+
+# Search operators borrowed from Google that the arXiv API silently treats
+# as keywords ("all:foo+site:arxiv.org" matches papers literally containing
+# 'site' and 'arxiv.org' in any field). The over-recall then trips the
+# relevance filter and returns 0 hits — looks like a search failure but is
+# really a query bug. Catch it before it hits the network.
+_GOOGLE_OPERATORS = (
+    "site:", "filetype:", "intitle:", "inurl:", "cache:",
+    "intext:", "allintitle:", "allinurl:", "allintext:",
+)
 INITIAL_BACKOFF_SECONDS = 1.5
 MAX_BACKOFF_SECONDS = 15.0
 
@@ -287,6 +303,11 @@ class SearchLiteratureTool(Tool):
         # ``set_quota`` (UI-configurable); 0 means unlimited.
         self._quota: int = 0
         self._calls_used: int = 0
+        # Consecutive-failure counter, reset on any successful call. Used to
+        # escalate the error message after sustained outages so the agent
+        # stops retrying and switches to the "document the limitation"
+        # path instead of fabricating references (the 6db6e3ff failure mode).
+        self._consecutive_failures: int = 0
 
     def set_quota(self, quota: int) -> None:
         """Cap the number of search calls per run. ``quota <= 0`` disables the cap."""
@@ -300,13 +321,27 @@ class SearchLiteratureTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Search for academic papers via arXiv. Returns paper titles, "
-            "authors, year, abstract, and an open-access PDF URL when available. "
-            "Use this to find related work, understand baselines, or check if an "
-            "approach already exists. Plan all your queries up front (Phase 1) — "
-            "this tool has a per-run quota so reactive re-searching wastes budget. "
-            "If you need to inspect the actual paper contents, follow up with "
-            "read_paper_fulltext on a promising result."
+            "Search for academic papers via the arXiv API. Returns paper "
+            "titles, authors, year, abstract, and an open-access PDF URL "
+            "when available. Use this to find related work, understand "
+            "baselines, or check if an approach already exists. Plan all "
+            "your queries up front (Phase 1) — this tool has a per-run "
+            "quota so reactive re-searching wastes budget. If you need to "
+            "inspect the actual paper contents, follow up with "
+            "read_paper_fulltext on a promising result.\n\n"
+            "Query format — IMPORTANT:\n"
+            "  • This is the arXiv API, NOT Google. Plain noun-phrase "
+            "queries work best (e.g. 'reinforcement learning obstacle "
+            "avoidance path planning').\n"
+            "  • Do NOT use Google search operators: site:, filetype:, "
+            "intitle:, inurl:, cache:, intext:. The arXiv API treats them "
+            "as literal keywords, which over-recalls and then trips the "
+            "relevance filter — the call will fail before reaching the "
+            "network.\n"
+            "  • Do NOT add 'site:arxiv.org' — every result is already "
+            "from arXiv.\n"
+            "  • Boolean operators (AND/OR/NOT) are not supported the way "
+            "Google handles them; just list keywords."
         )
 
     @property
@@ -350,6 +385,30 @@ class SearchLiteratureTool(Tool):
 
     def execute(self, query: str, max_results: int | None = None) -> ToolResult:
         limit = max_results or self.max_results
+
+        # Pre-validate: reject queries that mix in Google operators arXiv
+        # doesn't understand. Returning success=False matches the wire
+        # format the agent already handles, but we DON'T count this
+        # toward quota or consecutive-failures — a syntax mistake
+        # shouldn't burn the search budget or trigger the outage path.
+        bad_ops = self._detect_google_operators(query)
+        if bad_ops:
+            return ToolResult(
+                output=(
+                    f"Query rejected: contains operator(s) {sorted(bad_ops)!r} "
+                    "that arXiv API doesn't understand (those are Google "
+                    "syntax). Drop them and resubmit a plain keyword query "
+                    f"— e.g. {self._strip_google_operators(query)!r}. "
+                    "This call did NOT count against your search quota."
+                ),
+                success=False,
+                metadata={
+                    "rejected_reason": "google_operators",
+                    "operators": sorted(bad_ops),
+                    "calls_used": self._calls_used,
+                    "quota": self._quota,
+                },
+            )
 
         # Quota check FIRST so a denied call doesn't even hit the network. Note
         # we still count denied calls — that prevents an agent from bypassing
@@ -396,6 +455,7 @@ class SearchLiteratureTool(Tool):
                     f"{RELEVANCE_THRESHOLD:.2f} for query {query!r}: {preview}"
                 )
             if not kept:
+                self._consecutive_failures += 1
                 return ToolResult(
                     output=(
                         "All literature search hits fell below the relevance "
@@ -404,6 +464,7 @@ class SearchLiteratureTool(Tool):
                         "Refine the query with more specific terms (the dataset "
                         "name, the algorithm family, the venue) and try again."
                         + relevance_note
+                        + self._escalation_note()
                     ),
                     success=False,
                     metadata={
@@ -412,8 +473,11 @@ class SearchLiteratureTool(Tool):
                         "source": backend_used or "arxiv",
                         "calls_used": self._calls_used,
                         "quota": self._quota,
+                        "consecutive_failures": self._consecutive_failures,
                     },
                 )
+            # Successful hit — reset the consecutive-failure streak.
+            self._consecutive_failures = 0
             self._persist_cache(query, backend_used or "arxiv", kept)
             quota_note = ""
             if self._quota > 0:
@@ -434,6 +498,7 @@ class SearchLiteratureTool(Tool):
             )
 
         if failure is not None:
+            self._consecutive_failures += 1
             reason = f"{type(failure).__name__}: {failure}"
             detail = f"\n\nLast error: {reason}"
             if attempt_log:
@@ -445,12 +510,18 @@ class SearchLiteratureTool(Tool):
                     "try again, or proceed while explicitly noting the "
                     "literature-search limitation."
                     + detail
+                    + self._escalation_note()
                 ),
                 success=False,
-                metadata={"calls_used": self._calls_used, "quota": self._quota},
+                metadata={
+                    "calls_used": self._calls_used,
+                    "quota": self._quota,
+                    "consecutive_failures": self._consecutive_failures,
+                },
             )
 
         # arXiv responded successfully but with zero entries.
+        self._consecutive_failures += 1
         detail = ""
         if attempt_log:
             detail = "\n\nRetry log:\n- " + "\n- ".join(attempt_log)
@@ -460,7 +531,59 @@ class SearchLiteratureTool(Tool):
                 "Try a broader or differently phrased query, or proceed while "
                 "explicitly noting that no related work was found."
                 + detail
+                + self._escalation_note()
             ),
             success=False,
-            metadata={"calls_used": self._calls_used, "quota": self._quota},
+            metadata={
+                "calls_used": self._calls_used,
+                "quota": self._quota,
+                "consecutive_failures": self._consecutive_failures,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _detect_google_operators(query: str) -> set[str]:
+        """Return any Google-style operators found in ``query``."""
+        lowered = (query or "").lower()
+        return {op for op in _GOOGLE_OPERATORS if op in lowered}
+
+    @staticmethod
+    def _strip_google_operators(query: str) -> str:
+        """Best-effort cleanup so the agent has a plain-keyword version
+        of its query to copy-paste back. Tokens that contain a banned
+        operator are dropped wholesale; the rest are joined with single
+        spaces. Whitespace-only result falls back to the original
+        (defensive — the user-facing message will still be useful)."""
+        tokens = (query or "").split()
+        cleaned = [
+            tok for tok in tokens
+            if not any(op in tok.lower() for op in _GOOGLE_OPERATORS)
+        ]
+        out = " ".join(cleaned).strip()
+        return out or query
+
+    def _escalation_note(self) -> str:
+        """Strong "stop searching, document the limitation" message after
+        sustained outages. Empty until the streak hits the threshold."""
+        if self._consecutive_failures < _CONSECUTIVE_FAILURE_ESCALATION:
+            return ""
+        return (
+            f"\n\n[ESCALATION] {self._consecutive_failures} consecutive "
+            "search_literature failures across different queries. The "
+            "arXiv API is unavailable for this run. STOP retrying — "
+            "additional searches will burn the budget without producing "
+            "evidence. Switch to the literature-unavailable path:\n"
+            "  • In your generate_report call, ADD a Limitations section "
+            "that explicitly states 'literature search via arXiv was "
+            "unavailable during this run; references that would normally "
+            "anchor the Related Work were not retrievable'.\n"
+            "  • Do NOT fabricate references. Every citation must trace "
+            "to a successful search_literature or read_paper_fulltext "
+            "call in THIS run; the citation guardrail will reject any "
+            "you invent.\n"
+            "  • Pivot the report to focus on what you CAN ground: your "
+            "own experimental results."
         )

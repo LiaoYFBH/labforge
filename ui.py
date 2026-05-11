@@ -1157,6 +1157,89 @@ label, .gr-form > label, .label {
   color: var(--sp-text-2) !important;
 }
 
+/* Field hint (small "?" link next to token / OCR inputs) -------------------- */
+.field-hint-row {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 8px 2px;
+  font-size: 11px;
+  color: var(--sp-text-3);
+  line-height: 1.4;
+  flex-wrap: wrap;
+}
+.field-hint-row .field-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-bg-soft);
+  color: var(--sp-text-2);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none !important;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.field-hint-row .field-hint:hover,
+.field-hint-row .field-hint:focus {
+  background: var(--sp-text-1);
+  color: var(--sp-bg) !important;
+  border-color: var(--sp-text-1);
+  outline: none;
+}
+.field-hint-row .field-hint-text {
+  color: var(--sp-text-3);
+}
+.field-hint-row .field-hint-text a {
+  color: var(--sp-accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--sp-accent);
+}
+.field-hint-row .field-hint-text a:hover { color: var(--sp-text-1); border-bottom-color: var(--sp-text-1); }
+
+/* Persistent password visibility toggle (eye icon) -------------------------- */
+/* Gradio 5's Textbox does not ship a built-in show/hide toggle for
+ * type="password" inputs, so we inject one in JS (see init_js) and style it
+ * here. The button always lives at the right edge of the input so users can
+ * peek at the token they typed at any time. */
+.input-container:has(> input[data-testid="password"]) {
+  position: relative;
+}
+.pf-eye-toggle {
+  position: absolute !important;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  padding: 3px !important;
+  margin: 0 !important;
+  color: var(--sp-text-3) !important;
+  cursor: pointer;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px !important;
+  z-index: 5;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  line-height: 1;
+}
+.pf-eye-toggle:hover {
+  color: var(--sp-text-1) !important;
+  background: var(--sp-bg-tint) !important;
+  border-color: var(--sp-border) !important;
+}
+.pf-eye-toggle.pf-eye-on { color: var(--sp-text-1) !important; }
+input[data-pf-eye-toggled="1"] { padding-right: 32px !important; }
+
 /* Settings summary card override (used on the workspace rail) */
 .settings-summary-card {
   border: 1px solid var(--sp-border);
@@ -1476,11 +1559,12 @@ def create_ui() -> gr.Blocks:
     # Gradio's Textbox `submit` event only fires on Ctrl+Enter for multi-line
     # boxes, so we wire the textarea's keydown ourselves: plain Enter clicks
     # the Send button, Shift+Enter falls through to the textarea's native
-    # newline. We wrap in a MutationObserver because Gradio mounts components
-    # asynchronously and the textarea may not exist when this script first runs.
+    # newline. We also inject a persistent eye toggle next to every password
+    # input so users can verify the token they typed at any time. Both run
+    # under one MutationObserver because Gradio mounts components async.
     enter_send_js = """
 () => {
-  const wire = () => {
+  const wireEnterSend = () => {
     const wrap = document.getElementById("chat-input-box");
     if (!wrap) return false;
     const ta = wrap.querySelector("textarea");
@@ -1499,10 +1583,46 @@ def create_ui() -> gr.Blocks:
     });
     return true;
   };
-  if (!wire()) {
-    const obs = new MutationObserver(() => { if (wire()) obs.disconnect(); });
-    obs.observe(document.body, { childList: true, subtree: true });
-  }
+
+  const EYE_OPEN = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a19.77 19.77 0 0 1 4.06-5.06"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a19.77 19.77 0 0 1-3.16 4.36"/><path d="M14.12 14.12A3 3 0 0 1 9.88 9.88"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+  const attachEye = (input) => {
+    if (!input || input.dataset.pfEyeToggled === "1") return;
+    const parent = input.parentElement;
+    if (!parent) return;
+    input.dataset.pfEyeToggled = "1";
+    const cs = getComputedStyle(parent);
+    if (cs.position === "static") parent.style.position = "relative";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pf-eye-toggle";
+    btn.tabIndex = -1;
+    btn.setAttribute("aria-label", "切换显示 Token");
+    btn.setAttribute("title", "点击查看 / 隐藏 Token");
+    btn.innerHTML = EYE_OFF;
+    btn.addEventListener("mousedown", (e) => { e.preventDefault(); });
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const isPwd = input.type === "password";
+      input.type = isPwd ? "text" : "password";
+      btn.innerHTML = isPwd ? EYE_OPEN : EYE_OFF;
+      btn.classList.toggle("pf-eye-on", isPwd);
+      btn.setAttribute("title", isPwd ? "点击隐藏 Token" : "点击查看 Token");
+    });
+    parent.appendChild(btn);
+  };
+
+  const wirePasswordToggles = () => {
+    const inputs = document.querySelectorAll('input[data-testid="password"]');
+    inputs.forEach(attachEye);
+  };
+
+  const tick = () => { wireEnterSend(); wirePasswordToggles(); };
+  tick();
+  const obs = new MutationObserver(tick);
+  obs.observe(document.body, { childList: true, subtree: true });
 }
 """
 
@@ -1789,6 +1909,18 @@ def create_ui() -> gr.Blocks:
                                 value=initial_settings.agent_api_key,
                                 placeholder="留空时回退到环境变量",
                             )
+                            gr.HTML(
+                                '<div class="field-hint-row">'
+                                '<a class="field-hint" '
+                                'href="https://aistudio.baidu.com/account/accessToken" '
+                                'target="_blank" rel="noopener noreferrer" '
+                                'title="点击前往百度 AI Studio 获取 API Token">?</a>'
+                                '<span class="field-hint-text">不知道在哪获取？前往 '
+                                '<a href="https://aistudio.baidu.com/account/accessToken" '
+                                'target="_blank" rel="noopener noreferrer">'
+                                'aistudio.baidu.com/account/accessToken</a> 查看你的 Token。</span>'
+                                '</div>'
+                            )
 
                         with gr.Group(elem_classes=["surface-card"]):
                             gr.HTML(
@@ -1819,6 +1951,18 @@ def create_ui() -> gr.Blocks:
                                 type="password",
                                 value=initial_settings.reviewer_api_key,
                             )
+                            gr.HTML(
+                                '<div class="field-hint-row">'
+                                '<a class="field-hint" '
+                                'href="https://aistudio.baidu.com/account/accessToken" '
+                                'target="_blank" rel="noopener noreferrer" '
+                                'title="点击前往百度 AI Studio 获取 API Token">?</a>'
+                                '<span class="field-hint-text">不知道在哪获取？前往 '
+                                '<a href="https://aistudio.baidu.com/account/accessToken" '
+                                'target="_blank" rel="noopener noreferrer">'
+                                'aistudio.baidu.com/account/accessToken</a> 查看你的 Token。</span>'
+                                '</div>'
+                            )
 
                         with gr.Group(elem_classes=["surface-card"]):
                             gr.HTML(
@@ -1835,10 +1979,34 @@ def create_ui() -> gr.Blocks:
                                 label="OCR API URL",
                                 value=initial_settings.ocr_api_url,
                             )
+                            gr.HTML(
+                                '<div class="field-hint-row">'
+                                '<a class="field-hint" '
+                                'href="https://aistudio.baidu.com/paddleocr" '
+                                'target="_blank" rel="noopener noreferrer" '
+                                'title="点击前往 PaddleOCR 页面，再点击 “API” 找到 URL 和 Token">?</a>'
+                                '<span class="field-hint-text">前往 '
+                                '<a href="https://aistudio.baidu.com/paddleocr" '
+                                'target="_blank" rel="noopener noreferrer">'
+                                'aistudio.baidu.com/paddleocr</a>，点击 “API” 即可找到 URL 和 Token。</span>'
+                                '</div>'
+                            )
                             ocr_token = gr.Textbox(
                                 label="OCR Token",
                                 type="password",
                                 value=initial_settings.ocr_token,
+                            )
+                            gr.HTML(
+                                '<div class="field-hint-row">'
+                                '<a class="field-hint" '
+                                'href="https://aistudio.baidu.com/paddleocr" '
+                                'target="_blank" rel="noopener noreferrer" '
+                                'title="点击前往 PaddleOCR 页面，再点击 “API” 找到 URL 和 Token">?</a>'
+                                '<span class="field-hint-text">前往 '
+                                '<a href="https://aistudio.baidu.com/paddleocr" '
+                                'target="_blank" rel="noopener noreferrer">'
+                                'aistudio.baidu.com/paddleocr</a>，点击 “API” 即可找到 URL 和 Token。</span>'
+                                '</div>'
                             )
 
                         with gr.Group(elem_classes=["surface-card"]):

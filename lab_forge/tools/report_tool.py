@@ -34,8 +34,41 @@ from lab_forge.paper_bundle import (
 from lab_forge.result_guardrails import (
     blocking_findings,
     format_findings,
+    is_literature_unavailable,
     report_text_discloses_findings,
+    validate_figure_content,
     validate_workspace_results,
+)
+
+
+# Auto-injected paragraph when the run produced zero literature evidence.
+# Kept verbatim so the agent's downstream review / publication checks can
+# pattern-match it, and so future audits can confirm the disclosure was
+# automatic rather than agent-authored.
+_LITERATURE_UNAVAILABLE_LIMITATION = (
+    "**Literature search unavailable for this run.** "
+    "No external references were retrievable during execution: "
+    "search_literature produced no usable hits and read_paper_fulltext "
+    "was not run successfully on any paper. The Related Work section "
+    "below therefore reflects only what could be grounded in this run's "
+    "own experiments. A future re-run with a stable literature backend "
+    "would be needed before publishing the comparative claims this "
+    "topic ultimately calls for."
+)
+
+# Substring patterns we look for to decide whether the agent has ALREADY
+# disclosed the literature outage in its draft. Lowercased; matched as
+# substrings against ``related_work`` + ``conclusion``. Kept short and
+# generic so the check works across English/Chinese drafts and across
+# topics.
+_LITERATURE_DISCLOSURE_HINTS = (
+    "literature search",
+    "literature was unavailable",
+    "literature_cache",
+    "no references were retrieved",
+    "未能检索到文献",
+    "文献检索失败",
+    "文献检索未能",
 )
 
 # Reuse paper_forge's LLM-output cleaner so the section-expansion path here
@@ -263,6 +296,9 @@ class GenerateReportTool(Tool):
         writer_llm: WriterLLM | None = None,
         expand_sections: bool = True,
         task_description: str = "",
+        fidelity_critic=None,
+        outcome_judge_llm=None,
+        vision_llm=None,
     ):
         self.working_dir = Path(working_dir)
         # Optional writer-LLM used for the per-section expansion pass. When
@@ -278,6 +314,37 @@ class GenerateReportTool(Tool):
         # literally containing "NO EXPERIMENTAL RESULTS (SURVEY ONLY TASK)"
         # just to clear the validator).
         self.task_description = task_description or ""
+        # Numeric-grounding consecutive-failure counter, mirroring the
+        # fidelity critic's reject-once-then-accept policy. Resets on
+        # any clean pass.
+        self._numeric_grounding_failures = 0
+        # Topic-fidelity critic (see ``lab_forge.topic_fidelity``).
+        # Signature: critic(topic, plan, draft) -> FidelityVerdict. ``None``
+        # means the critic stage is skipped — keeps unit tests / benchmark
+        # runs simple, and degrades gracefully when no LLM is available.
+        self.fidelity_critic = fidelity_critic
+        # Per-method outcome judge (see ``lab_forge.method_outcomes``).
+        # When supplied, it runs once per generate_report call to read
+        # the workspace evidence and label each will_execute method as
+        # success / partial / implementation_failure / etc. The
+        # resulting outcome block is auto-injected into the report so
+        # the writer LLM cannot contradict its own data. ``None``
+        # disables the stage (kept that way for unit tests / benchmark
+        # runs; production paths get the agent LLM here).
+        self.outcome_judge_llm = outcome_judge_llm
+        # Vision-capable LLM for the figure-semantics gate
+        # (``lab_forge.vision_figure_check``). ``None`` means the gate
+        # is silently skipped — the production user runs deepseek-v3
+        # which is text-only. Wiring requires the user to plug in a
+        # vision-capable chat model (Claude / Qwen-VL / GPT-4V).
+        self.vision_llm = vision_llm
+        # Same reject-once-then-accept policy as the other content gates.
+        self._vision_check_failures = 0
+        # Consecutive-rejection counter, used to enforce the
+        # "reject once, accept-with-limitations on retry" policy. Reset to
+        # 0 on any successful submission so a re-used tool instance
+        # doesn't carry stale state between runs.
+        self._fidelity_failures = 0
 
     def _is_survey_mode(self) -> bool:
         """Whether this run is a literature-survey-only task.
@@ -413,6 +480,36 @@ class GenerateReportTool(Tool):
         figures: list[dict] | None = None,
         tables: list[dict] | None = None,
     ) -> ToolResult:
+        # Schema completeness gate — runs FIRST so we never spend writer-LLM
+        # tokens on a draft that's already structurally incomplete. Catches
+        # the trajectory-194edbd4 failure mode where the agent shipped
+        # ``abstract=""`` without anyone flagging it.
+        completeness_problems = self._check_completeness(
+            abstract=abstract,
+            results=results,
+            introduction=introduction,
+            conclusion=conclusion,
+            title=title,
+        )
+        if completeness_problems:
+            return ToolResult(
+                output=(
+                    "generate_report REJECTED — required sections are missing "
+                    "or too short:\n\n"
+                    + "\n".join(f"  • {p}" for p in completeness_problems)
+                    + "\n\nFix path: re-call generate_report with each of the "
+                    "above fields populated. The abstract should preview "
+                    "task → methods → key findings in 2-4 sentences; the "
+                    "results section should report your concrete numbers; "
+                    "the conclusion should state what your evidence supports."
+                ),
+                success=False,
+                metadata={
+                    "completeness_problems": completeness_problems,
+                    "rejected_reason": "incomplete_required_sections",
+                },
+            )
+
         # Deterministic correctness gate. If the workspace contains machine-
         # detectable invalid results (inf / NaN / negative convergence rate)
         # the paper may proceed only when the agent explicitly frames them as
@@ -520,6 +617,42 @@ class GenerateReportTool(Tool):
                 metadata={"missing_artifact_paths": True},
             )
 
+        # Figure-content gate: catches blank PNGs that passed path-existence
+        # because the file was written but nothing was drawn on it (e.g.
+        # ``plt.figure(); env.render(); plt.savefig()`` where ``env.render``
+        # silently drew on a different figure). Without this check the agent
+        # ships a paper with white rectangles for figures.
+        blank_figures = validate_figure_content(self.working_dir, figures or [])
+        if blank_figures:
+            return ToolResult(
+                output=(
+                    "generate_report was rejected: one or more figures you "
+                    "passed are blank.\n\n"
+                    + format_findings(blank_figures)
+                    + "\n\nFix path:\n"
+                    "  1. Open each blank figure in your workspace and "
+                    "confirm visually (the PNG is pure-white / single-color).\n"
+                    "  2. Locate the execute_code call that produced it. "
+                    "Common causes:\n"
+                    "       - a custom render() / plot() helper drew on a "
+                    "different matplotlib figure than the one being saved;\n"
+                    "       - plt.savefig was called BEFORE the data was "
+                    "added to the axes;\n"
+                    "       - the data passed in was empty / all-NaN so "
+                    "matplotlib silently drew nothing.\n"
+                    "  3. Re-run the corrected code, verify the new PNG is "
+                    "non-blank (e.g. with ``Image.open(...).getextrema()``), "
+                    "then call generate_report again."
+                ),
+                success=False,
+                metadata={
+                    "blank_figures": [
+                        {"path": f.location, "diagnostic": f.value, "reason": f.reason}
+                        for f in blank_figures
+                    ],
+                },
+            )
+
         experiment_gate = self._validate_experiment_evidence(figures or [], tables or [])
         if experiment_gate:
             return ToolResult(
@@ -527,6 +660,162 @@ class GenerateReportTool(Tool):
                 success=False,
                 metadata={"experiment_evidence_missing": True},
             )
+
+        # Vision-LLM figure semantics gate (opt-in; see
+        # ``lab_forge.vision_figure_check``). Catches the cases the
+        # blank-figure pixel check cannot — figures that are technically
+        # populated but show "stuck at origin" / "flat learning curve"
+        # / "agent failed to converge" patterns the eye picks up but
+        # std-of-pixels doesn't. Skipped silently when ``vision_llm``
+        # is None (default for text-only model deployments).
+        from ..vision_figure_check import (
+            assess_figure_semantics,
+            render_findings as _render_vision,
+        )
+
+        vision_findings: list = []
+        vision_metadata: dict[str, Any] = {}
+        if self.vision_llm is not None:
+            topic_for_vision = self._extract_topic_from_task_description()
+            vision_findings = assess_figure_semantics(
+                working_dir=self.working_dir,
+                figure_entries=figures or [],
+                topic=topic_for_vision,
+                vision_llm=self.vision_llm,
+            )
+            if vision_findings:
+                vision_metadata = {
+                    "ungrounded_figure_count": len(vision_findings),
+                    "findings": [
+                        {"path": f.path, "reason": f.reason}
+                        for f in vision_findings
+                    ],
+                    "consecutive_failures_before_this_call": self._vision_check_failures,
+                }
+                self._vision_check_failures += 1
+                if self._vision_check_failures < 2:
+                    return ToolResult(
+                        output=(
+                            "generate_report REJECTED — the vision figure-"
+                            "semantics check flagged "
+                            f"{len(vision_findings)} figure(s) as "
+                            "implausible given the topic + caption:\n\n"
+                            + _render_vision(vision_findings)
+                            + "\n\nFix path: open each flagged figure, "
+                            "verify the underlying experiment actually "
+                            "produced sensible data, re-run if needed, "
+                            "then call generate_report again."
+                        ),
+                        success=False,
+                        metadata={"vision_figure_check": vision_metadata},
+                    )
+                # Second-attempt failure: accept but record the warning
+                # for downstream consumers (UI / PDF export caption).
+                vision_metadata["accepted_after_retry"] = True
+            else:
+                self._vision_check_failures = 0
+
+        # Literature-unavailable mode. When the run produced ZERO literature
+        # evidence (empty literature_cache.jsonl, no papers/**/manifest.json),
+        # we (a) auto-disclose the outage in the draft so the published PDF
+        # honestly reflects what happened, and (b) signal the topic-fidelity
+        # critic so it doesn't penalize coverage_gaps for literature_only
+        # methods that the agent legitimately couldn't reach. Detection
+        # is source-agnostic: outage / quota / bad queries / agent never
+        # tried — all roads lead here. The disclosure is only injected
+        # when the agent didn't already write one (substring sniff for
+        # generic "literature search ..." phrases in EN+ZH).
+        literature_unavailable = is_literature_unavailable(self.working_dir)
+        literature_disclosure_injected = False
+        if literature_unavailable and not self._draft_already_discloses_literature_outage(
+            related_work, conclusion, abstract
+        ):
+            related_work = self._inject_literature_outage_paragraph(related_work)
+            literature_disclosure_injected = True
+
+        # Outcome-aware writing (see ``lab_forge.method_outcomes``). One
+        # narrow LLM call reads the run's CSV/log evidence and labels each
+        # ``will_execute`` method as success / partial / implementation
+        # _failure / etc. The resulting outcome block is prepended to
+        # the Setup section so it sits in the writer LLM's context as
+        # ground-truth fact and shows up in the rendered markdown
+        # bundle. The agent's own prose can still elaborate around it
+        # but cannot claim "method X succeeded" when the outcome judge
+        # labelled X as implementation_failure — the contradiction
+        # would be visible to any reader.
+        from ..method_outcomes import (
+            assess_method_outcomes,
+            render_outcomes_block,
+        )
+        from ..tools.scope_lock_tool import load_plan_from_workspace as _load_plan
+
+        method_outcomes_list: list = []
+        outcomes_injected = False
+        if self.outcome_judge_llm is not None:
+            method_outcomes_list = assess_method_outcomes(
+                working_dir=self.working_dir,
+                plan=_load_plan(self.working_dir),
+                llm=self.outcome_judge_llm,
+            )
+            block = render_outcomes_block(method_outcomes_list)
+            if block:
+                # Prepend to setup so it's the first thing the reader sees
+                # in the experimental section, and so the writer expansion
+                # treats it as load-bearing context.
+                setup = block + "\n" + (setup or "")
+                outcomes_injected = True
+
+        # Topic-fidelity critic (see ``lab_forge.topic_fidelity``). Runs
+        # AFTER the deterministic guardrails (results / citations / paths
+        # / experiment evidence) so we never spend an LLM call on a draft
+        # that's about to be rejected for a structural reason. Runs
+        # BEFORE the writer-LLM expansion pass to avoid throwing away
+        # expensive section rewrites if the critic rejects.
+        injected_limitations = ""
+        critic_metadata: dict[str, Any] = {}
+        if self.fidelity_critic is not None:
+            verdict = self._run_fidelity_critic(
+                title=title,
+                abstract=abstract,
+                section_drafts={
+                    "introduction": introduction,
+                    "related_work": related_work,
+                    "methodology": methodology,
+                    "setup": setup,
+                    "results": results,
+                    "analysis": analysis,
+                    "conclusion": conclusion,
+                },
+                literature_unavailable=literature_unavailable,
+            )
+            critic_metadata = {
+                "fidelity_score": verdict.fidelity_score,
+                "title_matches_topic": verdict.title_matches_topic,
+                "coverage_gaps": verdict.coverage_gaps,
+                "must_fix": verdict.must_fix,
+                "parsing_error": verdict.parsing_error,
+                "consecutive_failures_before_this_call": self._fidelity_failures,
+            }
+            if verdict.is_pass:
+                # Reset on any pass so a stale failure count doesn't strand
+                # a later, valid submission with an unwanted Limitations block.
+                self._fidelity_failures = 0
+            else:
+                self._fidelity_failures += 1
+                if self._fidelity_failures < 2:
+                    return ToolResult(
+                        output=verdict.render_rejection(),
+                        success=False,
+                        metadata={"topic_fidelity": critic_metadata},
+                    )
+                # Second-attempt failure: accept the draft but inject an
+                # honest Limitations paragraph derived from the critic's
+                # own limitations_text. We prepend rather than append so
+                # the limitations frame the conclusion's claims rather
+                # than read as a footnote.
+                injected_limitations = verdict.limitations_text
+                conclusion = self._inject_limitations(conclusion, verdict)
+                critic_metadata["accepted_with_limitations_after_retry"] = True
 
         section_drafts: dict[str, str] = {
             "introduction": introduction,
@@ -547,6 +836,70 @@ class GenerateReportTool(Tool):
                 drafts=section_drafts,
                 log=expansion_log,
             )
+
+        # Numeric-claim grounding (see ``lab_forge.numeric_grounding``).
+        # Runs AFTER writer expansion so any numbers the writer LLM
+        # introduced are also checked. Reject-once-then-accept policy
+        # mirrors the topic-fidelity critic so the worst-case rewrite
+        # cost stays bounded. Note: we check the FULL prose (abstract +
+        # all sections) so a fabricated "92%" hidden in introduction
+        # still trips this gate.
+        from ..numeric_grounding import (
+            find_ungrounded_numeric_claims,
+            render_findings as _render_grounding,
+        )
+
+        full_prose = "\n\n".join([abstract or "", *section_drafts.values()])
+        ungrounded = find_ungrounded_numeric_claims(
+            working_dir=self.working_dir, prose=full_prose,
+        )
+        grounding_metadata: dict[str, Any] = {}
+        grounding_disclosure_injected = False
+        if ungrounded:
+            grounding_metadata = {
+                "ungrounded_count": len(ungrounded),
+                "ungrounded_claims": [
+                    {"value": c.value, "matched": c.matched_text, "context": c.context}
+                    for c in ungrounded[:20]
+                ],
+                "consecutive_failures_before_this_call": self._numeric_grounding_failures,
+            }
+            self._numeric_grounding_failures += 1
+            if self._numeric_grounding_failures < 2:
+                return ToolResult(
+                    output=(
+                        "generate_report REJECTED — found "
+                        f"{len(ungrounded)} numeric claim(s) in your prose "
+                        "that don't match anything in this run's evidence "
+                        "files (CSVs, JSONs, logs, literature_cache):\n\n"
+                        + _render_grounding(ungrounded)
+                        + "\n\nFix path: for each ungrounded claim, either\n"
+                        "  (a) replace it with a number from your actual CSV/log "
+                        "output (the agent is the only source of truth for "
+                        "experimental numbers in this paper), OR\n"
+                        "  (b) drop the claim from the prose entirely if you "
+                        "can't ground it.\n\n"
+                        "Do NOT cite background statistics ('Amazon has 750k "
+                        "robots', 'industry uses 3.2M drones') unless the "
+                        "exact figure appears in a paper you opened with "
+                        "read_paper_fulltext (then quote the source). On "
+                        "your next call this gate is auto-bypassed but the "
+                        "ungrounded claims will be flagged in the metadata."
+                    ),
+                    success=False,
+                    metadata={"numeric_grounding": grounding_metadata},
+                )
+            # Second-attempt failure: accept but inject a disclosure
+            # paragraph at the start of the conclusion so the reader
+            # is warned the agent's numeric claims could not be
+            # auto-traced to evidence.
+            section_drafts["conclusion"] = self._inject_grounding_disclosure(
+                section_drafts.get("conclusion", ""), ungrounded
+            )
+            grounding_disclosure_injected = True
+            grounding_metadata["accepted_with_disclosure_after_retry"] = True
+        else:
+            self._numeric_grounding_failures = 0
 
         bundle = build_paper_bundle(
             working_dir=self.working_dir,
@@ -596,25 +949,270 @@ class GenerateReportTool(Tool):
         if guardrail_summary:
             guardrail_status = "\n\n[Result guardrail]\n" + guardrail_summary
 
+        critic_status = ""
+        if injected_limitations:
+            critic_status = (
+                "\n\n[Topic-fidelity critic]\n"
+                "Accepted with auto-injected Limitations paragraph after a "
+                "second rewrite still did not satisfy the critic. The injected "
+                "text is in the Conclusion section."
+            )
+
+        literature_status = ""
+        if literature_disclosure_injected:
+            literature_status = (
+                "\n\n[Literature-unavailable mode]\n"
+                "This run produced no literature evidence (empty "
+                "literature_cache.jsonl, no papers/**/manifest.json). A "
+                "Limitations paragraph has been auto-prepended to the "
+                "Related Work section disclosing the outage. The fidelity "
+                "critic was told not to penalize coverage_gaps for "
+                "literature_only methods on this run."
+            )
+
+        success_metadata: dict[str, Any] = {
+            "report_path": report_name,
+            "bundle_path": bundle_name,
+            "references_count": len(bundle.get("references", [])),
+            "expansion_log": expansion_log,
+            "autodiscovery_log": autodiscovery_log,
+            "result_guardrail_findings": [f.__dict__ for f in result_findings],
+            "literature_unavailable": literature_unavailable,
+            "literature_disclosure_injected": literature_disclosure_injected,
+            "method_outcomes_injected": outcomes_injected,
+            "method_outcomes": [o.to_dict() for o in method_outcomes_list],
+            "numeric_grounding_disclosure_injected": grounding_disclosure_injected,
+        }
+        if critic_metadata:
+            success_metadata["topic_fidelity"] = critic_metadata
+        if grounding_metadata:
+            success_metadata["numeric_grounding"] = grounding_metadata
+        if vision_metadata:
+            success_metadata["vision_figure_check"] = vision_metadata
+
         return ToolResult(
             output=(
                 f"Report saved to {report_name}\n"
                 f"PaperForge bundle saved to {bundle_path.name}"
                 f"{guardrail_status}"
                 f"{autodiscovery_summary}"
-                f"{expansion_summary}\n\n"
+                f"{expansion_summary}"
+                f"{critic_status}"
+                f"{literature_status}\n\n"
                 f"{report_content[:2000]}"
             ),
             success=True,
-            metadata={
-                "report_path": report_name,
-                "bundle_path": bundle_name,
-                "references_count": len(bundle.get("references", [])),
-                "expansion_log": expansion_log,
-                "autodiscovery_log": autodiscovery_log,
-                "result_guardrail_findings": [f.__dict__ for f in result_findings],
-            },
+            metadata=success_metadata,
         )
+
+    def _run_fidelity_critic(
+        self,
+        *,
+        title: str,
+        abstract: str,
+        section_drafts: dict[str, str],
+        literature_unavailable: bool = False,
+    ):
+        """Invoke the critic with a representative slice of the draft.
+
+        Imported lazily so report_tool stays usable in test environments
+        that don't import the topic_fidelity module.
+        """
+        from ..topic_fidelity import FidelityVerdict
+        from ..tools.scope_lock_tool import load_plan_from_workspace
+
+        body_chunks = [
+            (label, section_drafts.get(label, "") or "")
+            for label in (
+                "introduction",
+                "related_work",
+                "methodology",
+                "setup",
+                "results",
+                "analysis",
+                "conclusion",
+            )
+        ]
+        body_text = "\n\n".join(
+            f"## {label.replace('_', ' ').title()}\n{content}"
+            for label, content in body_chunks
+            if content.strip()
+        )
+        plan = load_plan_from_workspace(self.working_dir)
+        topic = self._extract_topic_from_task_description()
+        try:
+            return self.fidelity_critic(
+                topic=topic,
+                plan=plan,
+                draft={"title": title, "abstract": abstract, "body": body_text},
+                literature_unavailable=literature_unavailable,
+            )
+        except TypeError:
+            # Older critic signature without ``literature_unavailable=``;
+            # fall back to the legacy call so a stale shim doesn't break
+            # the run. Production critics built via
+            # ``build_topic_fidelity_critic`` accept the new kwarg.
+            try:
+                return self.fidelity_critic(
+                    topic=topic,
+                    plan=plan,
+                    draft={"title": title, "abstract": abstract, "body": body_text},
+                )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Topic-fidelity critic raised; treating as neutral pass: %s", exc
+                )
+                return FidelityVerdict(
+                    fidelity_score=7,
+                    title_matches_topic=True,
+                    parsing_error=f"critic_exception: {exc}",
+                )
+        except Exception as exc:  # noqa: BLE001
+            # A critic that crashes must not crash report generation —
+            # return a neutral pass verdict so the existing guardrails
+            # remain the only blockers.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Topic-fidelity critic raised; treating as neutral pass: %s", exc
+            )
+            return FidelityVerdict(
+                fidelity_score=7,
+                title_matches_topic=True,
+                parsing_error=f"critic_exception: {exc}",
+            )
+
+    @staticmethod
+    def _inject_grounding_disclosure(conclusion: str, claims) -> str:
+        """Prepend a "ungrounded numeric claims" caveat to Conclusion.
+
+        Used as the second-attempt fallback when the agent rewrote but
+        the prose still contains numbers we can't trace to evidence.
+        Lists the worst offenders inline so the reader sees specifically
+        which numbers were not verified."""
+        head = list(claims)[:5]
+        if not head:
+            return conclusion or ""
+        listed = "; ".join(c.matched_text for c in head)
+        block = (
+            "**Numeric grounding caveat.** "
+            "The following numeric claims in this paper could not be "
+            f"automatically traced to this run's data files: {listed}. "
+            "Readers should treat these specific figures as unverified "
+            "by the run's evidence. The remaining numbers are grounded "
+            "in CSV / log outputs.\n\n"
+        )
+        return block + (conclusion or "")
+
+    @staticmethod
+    def _check_completeness(
+        *,
+        title: str,
+        abstract: str,
+        results: str,
+        introduction: str,
+        conclusion: str,
+    ) -> list[str]:
+        """Reject obviously incomplete drafts before any LLM call runs.
+
+        Length thresholds intentionally keep a generous margin so legitimate
+        terse drafts are not rejected — we're catching empty / one-word
+        sections, not enforcing publication length. Calibration:
+          • title ≥ 8 chars   — anything shorter is a placeholder
+          • abstract ≥ 80     — ~2 sentences; below this is the empty-abstract
+                                failure mode from trajectory 194edbd4
+          • results ≥ 50      — at least one substantive sentence about numbers
+          • introduction ≥ 50 — context paragraph
+          • conclusion ≥ 50   — closing claims paragraph
+
+        Returns a list of human-readable problem strings (empty when fine).
+        """
+        problems: list[str] = []
+        if len((title or "").strip()) < 8:
+            problems.append(
+                "title is missing or a placeholder "
+                f"(got {len((title or '').strip())} chars; need ≥ 8)"
+            )
+        if len((abstract or "").strip()) < 80:
+            problems.append(
+                "abstract is empty or too short "
+                f"(got {len((abstract or '').strip())} chars; need ≥ 80). "
+                "An abstract previews the task → methods → key findings in "
+                "2-4 sentences; do not ship a paper without one."
+            )
+        if len((results or "").strip()) < 50:
+            problems.append(
+                "results section is empty or too short "
+                f"(got {len((results or '').strip())} chars; need ≥ 50). "
+                "Quote the concrete numbers you actually measured."
+            )
+        if len((introduction or "").strip()) < 50:
+            problems.append(
+                "introduction is empty or too short "
+                f"(got {len((introduction or '').strip())} chars; need ≥ 50). "
+                "State the problem, motivation, and contribution."
+            )
+        if len((conclusion or "").strip()) < 50:
+            problems.append(
+                "conclusion is empty or too short "
+                f"(got {len((conclusion or '').strip())} chars; need ≥ 50). "
+                "Summarise what your evidence does and does not support."
+            )
+        return problems
+
+    @staticmethod
+    def _draft_already_discloses_literature_outage(
+        related_work: str, conclusion: str, abstract: str
+    ) -> bool:
+        """Substring sniff for an existing literature-outage disclosure
+        anywhere in the relevant sections. Avoids stacking duplicate
+        paragraphs when the agent has already done the right thing."""
+        haystack = "\n".join(s or "" for s in (related_work, conclusion, abstract)).lower()
+        return any(hint in haystack for hint in _LITERATURE_DISCLOSURE_HINTS)
+
+    @staticmethod
+    def _inject_literature_outage_paragraph(related_work: str) -> str:
+        """Prepend the auto-disclosure to Related Work.
+
+        Prepended (not appended) so the reader sees the limitation BEFORE
+        any other framing of cited work. Empty Related Work sections get
+        the paragraph as their entire body; non-empty ones get it as a
+        new lead paragraph.
+        """
+        existing = (related_work or "").strip()
+        if not existing:
+            return _LITERATURE_UNAVAILABLE_LIMITATION
+        return _LITERATURE_UNAVAILABLE_LIMITATION + "\n\n" + existing
+
+    def _extract_topic_from_task_description(self) -> str:
+        """Pull the original topic from the task_description preamble."""
+        for raw_line in (self.task_description or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.lower().startswith("research topic:"):
+                return line.split(":", 1)[1].strip()
+            return line
+        return ""
+
+    @staticmethod
+    def _inject_limitations(conclusion: str, verdict) -> str:
+        """Prepend an honest Limitations note to the Conclusion section.
+
+        We prepend rather than append so a reader sees the scope caveat
+        before the closing claims, which is the framing a defense panel
+        will look for.
+        """
+        if not verdict.limitations_text:
+            return conclusion
+        gap_lines = ""
+        if verdict.coverage_gaps:
+            gap_lines = "\n\nUncovered scope items: " + "; ".join(verdict.coverage_gaps) + "."
+        block = (
+            "**Limitations and scope caveat.** "
+            f"{verdict.limitations_text}{gap_lines}\n\n"
+        )
+        return block + (conclusion or "")
 
     @staticmethod
     def _combined_report_text(**values: Any) -> str:

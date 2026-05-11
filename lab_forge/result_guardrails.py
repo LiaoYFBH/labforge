@@ -106,6 +106,160 @@ def blocking_findings(findings: Iterable[ResultFinding]) -> list[ResultFinding]:
     return [finding for finding in findings if finding.severity == "error"]
 
 
+# Below this grayscale-pixel std on a non-trivially-sized image the figure
+# is effectively monochrome — either pure white (the failure mode that
+# motivated this gate, e.g. ``plt.figure(); env.render(); plt.savefig()``
+# where ``env.render`` doesn't draw onto the active axes) or pure single
+# color. Real scientific plots in this codebase calibrate to std≥30; the
+# threshold leaves a generous gap so unusual-but-valid figures aren't
+# falsely rejected.
+_BLANK_FIGURE_STD_THRESHOLD = 5.0
+_BLANK_FIGURE_MIN_SIDE_PX = 50  # smaller crops are not "figures", skip them
+
+
+def is_literature_unavailable(working_dir: str | Path) -> bool:
+    """True iff this run produced ZERO literature evidence on disk.
+
+    Literature evidence = either a non-empty ``literature_cache.jsonl``
+    (any successful ``search_literature`` call appends here) or any
+    ``papers/**/manifest.json`` file (any successful ``read_paper_fulltext``
+    creates one). When both are absent / empty, the run was unable to
+    ground references, regardless of why — arXiv outage, exhausted
+    quota, malformed queries, or simply that the agent never tried.
+
+    The check is deterministic and source-agnostic: the report tool
+    treats any "no literature" run uniformly (auto-inject Limitations
+    + relax the topic-fidelity critic's coverage check), so we don't
+    need to distinguish the failure modes here.
+    """
+    root = Path(working_dir)
+    if not root.exists():
+        return True
+    cache = root / "literature_cache.jsonl"
+    if cache.exists() and cache.stat().st_size > 0:
+        # Defensive: a single-byte file with no JSON line is still "no
+        # evidence". Confirm at least one parseable line.
+        try:
+            with cache.open("r", encoding="utf-8") as f:
+                for raw_line in f:
+                    if raw_line.strip():
+                        return False
+        except OSError:
+            pass
+    papers_dir = root / "papers"
+    if papers_dir.exists():
+        for manifest in papers_dir.rglob("manifest.json"):
+            if manifest.is_file():
+                return False
+    return True
+
+
+def validate_figure_content(
+    working_dir: str | Path,
+    figure_entries: Iterable[Any],
+) -> list[ResultFinding]:
+    """Flag rendered figure files that are blank / degenerate.
+
+    Catches the failure mode where ``plt.savefig`` writes a file but the
+    active figure has no plotted data — typically because a custom
+    ``render`` / ``plot`` helper drew onto a different figure or returned
+    early without drawing. The image-content check is cheap (PIL +
+    numpy std on grayscale pixels) and entirely domain-agnostic — no
+    dependency on the topic, methods, or expected plot shape.
+
+    ``figure_entries`` accepts the same dicts the agent passes to
+    ``generate_report(figures=...)`` (each with a ``path`` key). Strings
+    are tolerated for callers that have already extracted paths.
+
+    Returns ``[]`` when PIL/numpy aren't installed (import failure
+    degrades to no-op so this gate never breaks an otherwise-working
+    codebase). Returns ``[ResultFinding]`` entries with severity="error"
+    for each blank figure found.
+    """
+    paths = _extract_figure_paths(figure_entries)
+    if not paths:
+        return []
+    try:
+        from PIL import Image
+        import numpy as np
+    except ImportError:
+        return []
+
+    root = Path(working_dir)
+    findings: list[ResultFinding] = []
+    seen: set[str] = set()
+    for raw in paths:
+        if raw in seen:
+            continue
+        seen.add(raw)
+        full = (root / raw).resolve()
+        if not full.exists() or not full.is_file():
+            # Path-existence is checked elsewhere; don't double-report it here.
+            continue
+        if full.suffix.lower() not in {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}:
+            # SVG / PDF figures bypass this image-pixel check. SVG content
+            # validation would require an XML parser + path-data inspection;
+            # left out of scope for the deterministic gate.
+            continue
+        finding = _scan_figure_file(full, raw, Image, np)
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
+def _extract_figure_paths(entries: Iterable[Any]) -> list[str]:
+    """Pull a ``path`` string out of each entry. Tolerates dicts and strings."""
+    paths: list[str] = []
+    for entry in entries or []:
+        if isinstance(entry, dict):
+            raw = entry.get("path")
+            if isinstance(raw, str) and raw.strip():
+                paths.append(raw.strip())
+        elif isinstance(entry, str) and entry.strip():
+            paths.append(entry.strip())
+    return paths
+
+
+def _scan_figure_file(
+    full_path: Path,
+    rel_path: str,
+    Image: Any,
+    np: Any,
+) -> ResultFinding | None:
+    """Open one figure and return a ResultFinding if it's degenerate."""
+    try:
+        with Image.open(full_path) as img:
+            gray = img.convert("L")
+            arr = np.asarray(gray)
+    except Exception as exc:  # noqa: BLE001 — corrupt image is itself a finding
+        return ResultFinding(
+            source="figure",
+            location=rel_path,
+            value=f"<unreadable: {exc}>",
+            reason="figure file could not be opened as an image",
+        )
+    if arr.size == 0 or min(arr.shape[:2]) < _BLANK_FIGURE_MIN_SIDE_PX:
+        return None
+    std = float(arr.std())
+    if std >= _BLANK_FIGURE_STD_THRESHOLD:
+        return None
+    mean = float(arr.mean())
+    background_label = (
+        "all-white" if mean > 250 else "all-black" if mean < 5 else f"single-color (~{mean:.0f})"
+    )
+    return ResultFinding(
+        source="figure",
+        location=rel_path,
+        value=f"std={std:.2f}, mean={mean:.1f}",
+        reason=(
+            f"figure appears blank ({background_label}); your plotting code "
+            "ran but nothing was drawn onto the saved figure (typical cause: "
+            "a custom render() helper drew on a different figure, or "
+            "plt.savefig was called before the data was added)"
+        ),
+    )
+
+
 def format_findings(findings: Iterable[ResultFinding], *, max_items: int = 10) -> str:
     """Render findings as a concise message for the agent / UI."""
 

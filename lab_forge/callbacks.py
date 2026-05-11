@@ -8,7 +8,9 @@ Provides:
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 from .reviewer import Reviewer, ReviewResult
@@ -17,6 +19,25 @@ from .trajectory import Trajectory
 logger = logging.getLogger(__name__)
 
 StepCallback = Callable[[dict[str, Any]], None]
+
+
+# Reviewer's latest verdict at the report / submit checkpoint is mirrored
+# to this file so other tools (notably ``submit_result``) can consult it
+# without holding a reference to the live callback object. Keeping the
+# state on disk also means the gate works correctly when the same sandbox
+# is replayed across runs.
+REVIEWER_STATE_FILENAME = "reviewer_state.json"
+# Score below which we treat the verdict as "must fix before submit".
+# Calibrated to the existing reviewer scale (0.0-1.0). 0.6 catches the
+# trajectory-194edbd4 case (final review = 0.50) without being so strict
+# that minor-issue reviews block the run.
+REVIEWER_BLOCK_SCORE_THRESHOLD = 0.6
+# Maximum number of consecutive submit_result calls we'll bounce back to
+# the agent before accepting the draft with an auto-injected
+# "reviewer-flagged-but-unresolved" notice. Picked at 2 to mirror the
+# topic-fidelity critic policy ("reject once, accept on retry") so the
+# total worst-case rewrite cost is bounded across all gates.
+REVIEWER_MAX_REWRITE_ATTEMPTS = 2
 
 
 class PhaseTracker:
@@ -136,12 +157,20 @@ class ReviewerCallback:
         trajectory: Trajectory,
         step_callback: StepCallback | None = None,
         checkpoints: list[str] | None = None,
+        workspace_dir: str | Path | None = None,
     ):
         self.reviewer = reviewer
         self.task_description = task_description
         self.trajectory = trajectory
         self.step_callback = step_callback
         self.checkpoints = set(checkpoints or ["after_literature", "before_report"])
+        # Workspace dir is optional so legacy callers / unit tests can
+        # construct the callback without a sandbox. When supplied, the
+        # reviewer's latest report-checkpoint verdict is mirrored to
+        # ``<workspace>/reviewer_state.json`` so ``submit_result`` can
+        # consult it without holding a callback reference (see the
+        # ``REVIEWER_STATE_FILENAME`` constant above).
+        self.workspace_dir = Path(workspace_dir) if workspace_dir else None
 
         # State tracking
         self._literature_evidence: list[str] = []
@@ -282,12 +311,47 @@ class ReviewerCallback:
         except Exception:
             logger.exception("Reviewer thinking-card emit failed")
 
+    def _persist_state(self, checkpoint_name: str, result: ReviewResult) -> None:
+        """Mirror the latest review verdict to disk so ``submit_result``
+        (which doesn't hold a callback reference) can gate on it.
+
+        We only persist verdicts from the report / submit checkpoints —
+        literature/experiment reviews are advisory mid-run and shouldn't
+        block the final submit. Best-effort: an OS error here just
+        means the submit gate degrades to "no reviewer veto", which is
+        the pre-existing behaviour.
+        """
+        if self.workspace_dir is None:
+            return
+        if checkpoint_name not in ("报告评审", "最终评审"):
+            return
+        try:
+            self.workspace_dir.mkdir(parents=True, exist_ok=True)
+            (self.workspace_dir / REVIEWER_STATE_FILENAME).write_text(
+                json.dumps(
+                    {
+                        "checkpoint": checkpoint_name,
+                        "score": float(result.score),
+                        "passed": bool(result.passed),
+                        "issues": list(result.issues or []),
+                        "suggestion": result.suggestion or "",
+                        "is_infrastructure_error": bool(getattr(result, "error", False)),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.debug("reviewer_state.json write skipped: %s", exc)
+
     def _handle_review_result(self, checkpoint_name: str, result: ReviewResult) -> None:
         logger.info(
             "Review [%s]: passed=%s, score=%.2f, issues=%d, error=%s",
             checkpoint_name, result.passed, result.score, len(result.issues),
             getattr(result, "error", False),
         )
+        self._persist_state(checkpoint_name, result)
 
         # Track consecutive infrastructure failures so a permanently broken
         # reviewer (e.g. wrong model name → 401) doesn't lock the run.

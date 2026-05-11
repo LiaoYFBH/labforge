@@ -22,7 +22,9 @@ env.txt
 benchmark/
 benchmark.zip
 =0.2.0
-
+defense_slides.pdf
+defense_slides.tex
+tests
 # Python caches
 __pycache__/
 *.py[cod]
